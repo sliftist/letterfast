@@ -1,3 +1,24 @@
+1) Run a server that listens and setup code so you can call it
+    - Using websockets
+    - Just use the node-JS built-in server, not secure, just HTTP.
+    - Make it so it's actually just a helper function that takes an object which is just kind of like has a look up to a set of objects, which returns two functions, one which will start the server and the other which the client side will call which will then be able to call the functions and it will be type-safe using generic templates.
+    - Add a test "get server time" function, and a test button which will call this and show the result
+    - make it so that there is a global variable which keeps track of the last essentially like instance that was had a function called and then we can call that and it will give us information on that instance which will be type save and have all the functions but it will call them on the client so the server can call this function it will give an instance and it can call this functions allowing it to call service site functions on the client.
+
+2) Functions
+    - You create a game, it creates an ID, the ID is short, you can send them to URL, or you can send them the ID and they can type that in themselves.
+        - You can choose how many people you want the game to continue (2 - 16)
+    - People join the game from the id and once the game is filled up (enough people join) the game starts and no other people are allowed to join. When you create the game, you automatically join it.
+        - Everyone is told when the game is about to start in three seconds and then the game starts in three seconds. The server side then keeps track of how long or when the game ends with the set timeout and when the game ends it tells everyone that the game ends.
+        - The list of players is kept in an array. When a player's WebSocket disconnects, they are removed from all the games they are part of. The player who was first in the array has the ability to click a button to start the game. If we receive the start game message from anyone who is not in first in the array, we ignore it.
+        - Whenever the list of players change, we tell all of the players (and we tell them on connect)
+    - When you're in a game that has started and you play a word, we then send the word to the server. The server then keeps track of all the words and the scores of all of the players. We might need to abstract out the scoring function, so it's easy for the server to replicate the same code the client side code is showing.
+        - The server should have a little bit of leeway so you can start a second early and you can play a second after the game ends.
+    - When players add values, it should tell all the other players about the players' new score, but not about the word.
+    - The UI should show all of the other players scores.
+        - The players should just be numbered by their join order. There'll be no player names.
+    - When the game finishes, we show them a finished screen that shows them all of the scores and words of all of the players and highlights the player who has won.
+
 
 - Online play
     - Synchronized play (playing at the same time)
@@ -12,6 +33,8 @@
         - also add an option to manually hide it, which we remember in local storage
     - tactile feedback
     - Deploy as static site and test on phone
+
+- Smaller dictionary
 
 - Better UI
 

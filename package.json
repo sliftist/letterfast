@@ -8,6 +8,7 @@
         "socket-function": "*"
     },
     "scripts": {
+        "server": "yarn typenode ./web/server.ts",
         "type": "yarn tsc --noEmit",
         "build-web": "build-web",
         "watch-web": "slift-watch --port 9877 \"web/*.ts\" \"web/*.tsx\" \"yarn build-web\""
