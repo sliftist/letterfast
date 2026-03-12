@@ -250,9 +250,8 @@ export const multiplayerState = observable({
     gameId: undefined as string | undefined,
     myPlayerIndex: undefined as number | undefined,
     players: [] as MultiplayerPlayer[],
-    status: "waiting" as "waiting" | "countdown" | "playing" | "finished",
+    status: "waiting" as "waiting" | "playing" | "finished",
     grid: undefined as GridCell[][] | undefined,
     timeRemaining: 0,
-    countdown: 0,
     allWords: {} as Record<string, { word: string; points: number }[]>
 });

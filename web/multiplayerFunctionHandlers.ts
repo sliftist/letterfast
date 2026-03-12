@@ -2,6 +2,7 @@ import { createRPC } from "./rpc/createRPC";
 import { GridCell, multiplayerState } from "./GameState";
 import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller } from "./rpc/FunctionCaller";
+import { pageURL } from "./Page";
 
 function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentifier): void {
     onLastCallerDisconnect(() => {
@@ -61,15 +62,6 @@ const serverHandlers = {
         }
 
         GameManager.validateStartGame(gameId, player);
-        GameManager.startGameCountdown(gameId);
-
-        for (let i = 3; i > 0; i--) {
-            GameManager.broadcastToGame(gameId, (client) => {
-                void client.onCountdown(i);
-            });
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
         GameManager.startGamePlaying(gameId);
         const updatedGame = GameManager.getGame(gameId);
         if (updatedGame) {
@@ -119,11 +111,6 @@ export const clientHandlers = {
         multiplayerState.myPlayerIndex = yourPlayerIndex;
     },
 
-    async onCountdown(seconds: number): Promise<void> {
-        multiplayerState.countdown = seconds;
-        multiplayerState.status = "countdown";
-    },
-
     async onGameStart(grid: GridCell[][], startTime: number): Promise<void> {
         multiplayerState.grid = grid;
         multiplayerState.status = "playing";
@@ -138,6 +125,8 @@ export const clientHandlers = {
             }
         };
         updateTimer();
+
+        pageURL.value = "play";
     },
 
     async onGameEnd(players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {
@@ -151,9 +140,6 @@ type ClientHandlers = typeof clientHandlers;
 
 const clientHandlersNoOp: ClientHandlers = {
     async onPlayerUpdate(players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
-    },
-
-    async onCountdown(seconds: number): Promise<void> {
     },
 
     async onGameStart(grid: GridCell[][], startTime: number): Promise<void> {

@@ -291,6 +291,13 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
                                 ))}
                         </div>
                     )}
+                    {isMultiplayer && (
+                        <button onClick={() => {
+                            pageURL.value = "";
+                        }}>
+                            Back to Menu
+                        </button>
+                    )}
                 </div>
                 <div className={css.hbox(20).alignItems("start")}>
                     <div className={css.vbox(12)}>

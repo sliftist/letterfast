@@ -6,7 +6,6 @@ export type PlayerIdentifier = AllHandlers;
 
 export interface ClientHandlers {
     onPlayerUpdate(players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void>;
-    onCountdown(seconds: number): Promise<void>;
     onGameStart(grid: GridCell[][], startTime: number): Promise<void>;
     onGameEnd(players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void>;
 }
@@ -16,7 +15,7 @@ interface Game {
     id: string;
     playerCount: number;
     players: PlayerIdentifier[];
-    status: "waiting" | "countdown" | "playing" | "finished";
+    status: "waiting" | "playing" | "finished";
     grid: GridCell[][];
     scores: Map<PlayerIdentifier, number>;
     words: Map<PlayerIdentifier, { word: string; points: number; cells: { row: number; col: number }[] }[]>;
@@ -96,13 +95,6 @@ export function validateStartGame(gameId: string, player: PlayerIdentifier): voi
     }
 }
 
-export function startGameCountdown(gameId: string): void {
-    const game = games.get(gameId);
-    if (!game) {
-        throw new Error(`Game ${gameId} not found`);
-    }
-    game.status = "countdown";
-}
 
 export function startGamePlaying(gameId: string): void {
     const game = games.get(gameId);

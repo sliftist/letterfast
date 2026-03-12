@@ -36,7 +36,7 @@ export class GameLobby extends preact.Component {
     };
 
     render() {
-        const { gameId, myPlayerIndex, players, status, countdown } = multiplayerState;
+        const { gameId, myPlayerIndex, players, status } = multiplayerState;
 
         if (!gameId) {
             return <div className={css.pad2(20)}>No game ID</div>;
@@ -71,12 +71,6 @@ export class GameLobby extends preact.Component {
                         </button>
                     </div>
                 </div>
-
-                {status === "countdown" && (
-                    <div className={css.fontSize(48).fontWeight("bold").textAlign("center")}>
-                        Starting in {countdown}...
-                    </div>
-                )}
 
                 {status === "waiting" && (
                     <div className={css.vbox(16)}>

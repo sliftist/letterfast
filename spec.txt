@@ -1,10 +1,22 @@
-beside all of the create modes add a multiplayer button that will create it as multiplayer, instead of the multiplayer toggle.
-    - Allow the host to change the max number of players in the lobby instead of deciding it on startup. Limit it from 1 to 16 SERVERSIDE
 
-After the game finishes, make sure that they're dumped back into the lobby, and so the host can start the game again.   
+The button to go the the config page is gone? Fix this, users are trapped on the play page with no way to change settings or enter a multiplayer game
+
+Please make some fixes in the project. First of all, the ShareLink  seems to pre-populate the Join Game input, but it doesn't actually join the game. I don't care about popling the input, just join the actual game.
+
+The matched words seems to be broken at least in multiplayer. It shows score of other player, but not matched words.
+
+Make the UI better. We say other players in big bold letters and then have the list of players. You don't need to say other players just by saying that it's player two. They can tell it's other player.
+
+When a multiplayer game finishes, go back to the lobby, showing the scores of each player, in score order, and their words, with the host highlighted
+    - And, it should be the lobby so the host can start the game again.   
+    - We might have this functionality somewhere else, but it's presently not showing up, so that other functionality should be removed/moved.
     - Get rid of all of the auto start functionality. We should just always require the host to click start.
     - Get rid of the ability to change the max player count in a game. Keep it as a variable server side, but server side when we create a game, always set it to 16.
     - Do add for the ability for the host to change the game size in the lobby screen.
+
+Allow configuring the game duration as well (both in single player and multiplayer)
+    - Between 10 seconds and 1 hour.
+    
 
 
 Fixes
