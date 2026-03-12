@@ -1431,10 +1431,10 @@ preact-old-types@^10.28.1:
   resolved "https://registry.yarnpkg.com/preact-old-types/-/preact-old-types-10.28.1.tgz#58f9400aa1b80768809c296534ec7b49f6f09a0d"
   integrity sha512-7r64HwL/PJtzE7jUMFkYVec+vSUf3z8Uozd8Bhl4HMvhcWINFzJsIEHKLAlkeCbzv+jTQl0UwVeMJQ26jK5bDg==
 
-preact@10.24.3:
-  version "10.24.3"
-  resolved "https://registry.yarnpkg.com/preact/-/preact-10.24.3.tgz#086386bd47071e3b45410ef20844c21e23828f64"
-  integrity sha512-Z2dPnBnMUfyQfSQ+GBdsGa16hz35YmLmtTLhM169uW944hYL6xzTYkJjC07j+Wosz733pMWx0fgON3JNw1jJQA==
+preact@10.24.3, "preact@npm:preact-old-types@*":
+  version "10.28.1"
+  resolved "https://registry.yarnpkg.com/preact-old-types/-/preact-old-types-10.28.1.tgz#58f9400aa1b80768809c296534ec7b49f6f09a0d"
+  integrity sha512-7r64HwL/PJtzE7jUMFkYVec+vSUf3z8Uozd8Bhl4HMvhcWINFzJsIEHKLAlkeCbzv+jTQl0UwVeMJQ26jK5bDg==
 
 prelude-ls@^1.2.1:
   version "1.2.1"
