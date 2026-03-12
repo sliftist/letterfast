@@ -1,11 +1,11 @@
 import preact from "preact";
 import { css } from "typesafecss";
-import { Anchor } from "sliftutils/render-utils/Anchor";
 import { URLParam } from "sliftutils/render-utils/URLParam";
 import { observer } from "sliftutils/render-utils/observer";
-import { ExamplePage } from "./ExamplePage";
 import { LetterFastGame } from "./LetterFastGame";
 import { GameConfig } from "./GameConfig";
+import { GameLobby } from "./GameLobby";
+import { GameResults } from "./GameResults";
 
 export const pageURL = new URLParam("page");
 
@@ -41,33 +41,32 @@ export class Page extends preact.Component {
     render() {
         let pages = [
             {
-                key: "example",
-                content: <ExamplePage />
+                key: "",
+                content: <GameConfig />
             },
             {
                 key: "game",
                 content: <LetterFastGame />
             },
             {
-                key: "config",
-                content: <GameConfig />
+                key: "lobby",
+                content: <GameLobby />
+            },
+            {
+                key: "play",
+                content: <LetterFastGame multiplayer={true} />
+            },
+            {
+                key: "results",
+                content: <GameResults />
             },
         ];
 
-        let page = pages.find(p => p.key === pageURL.value) || pages[1];
+        let page = pages.find(p => p.key === pageURL.value) || pages[0];
 
         return (
-            <div className={css.size("100vw", "100vh").vbox(0)}>
-                <div className={css.hbox(12).pad2(20, 10).paddingBottom(5, "important")}>
-                    {pages.map(p => (
-                        <Anchor key={p.key} params={[[pageURL, p.key]]}>
-                            {p.key}
-                        </Anchor>
-                    ))}
-                </div>
-                <div className={css.overflowAuto.fillBoth}>
-                    {page.content}
-                </div>
+            <div className={css.size("100vw", "100vh")}>
+                {page.content}
             </div>
         );
     }

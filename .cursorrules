@@ -26,6 +26,8 @@ We use MobX for state management. Components should use a variable called synced
         }
     }
 
+NEVER Change any observables in the Render function or component did update. We are explicitly setting all Observables after calling async functions and so if we want to check for their value, we should do it before we set it.
+
 The code automatically updates on save, so do not ever run commands to rerun the site.
 
 If you need to add a dependency, don't just change the packs to JSON file. Properly use yarn add so you get the latest version, unless the user specifies a version or tells you otherwise.

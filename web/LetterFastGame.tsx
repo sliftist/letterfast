@@ -1,5 +1,5 @@
 import { observable } from "mobx";
-import { css } from "typesafecss";
+import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { sort } from "socket-function/src/misc";
@@ -21,8 +21,10 @@ import {
     formatTime,
     getWordSet,
     cleanup,
+    multiplayerState,
+    GridCell,
 } from "./GameState";
-
+import { getRPCClient } from "./rpcClient";
 function redrawCanvas(
     canvas: HTMLCanvasElement,
     selectedCells: { row: number; col: number }[],
@@ -55,8 +57,12 @@ interface FloatingScore {
     timestamp: number;
 }
 
+interface LetterFastGameProps {
+    multiplayer?: boolean;
+}
+
 @observer
-export class LetterFastGame extends preact.Component {
+export class LetterFastGame extends preact.Component<LetterFastGameProps> {
     canvas: HTMLCanvasElement | undefined;
     wrapper: HTMLDivElement | undefined;
     floatingScoreId = 0;
@@ -126,29 +132,46 @@ export class LetterFastGame extends preact.Component {
         this.redraw();
     };
 
-    onMouseUp = () => {
-        if (!this.synced.drawing || gameState.status !== "playing") return;
+    onMouseUp = async () => {
+        const isMultiplayer = this.props.multiplayer;
+        const currentState = isMultiplayer ? multiplayerState : gameState;
+        const currentGrid = isMultiplayer ? multiplayerState.grid : gameState.grid;
+
+        if (!this.synced.drawing) return;
+        if (!isMultiplayer && gameState.status !== "playing") return;
+        if (isMultiplayer && multiplayerState.status !== "playing") return;
+        if (!currentGrid) return;
+
         this.synced.drawing = false;
         this.synced.currentPos = undefined;
+
         let word = this.synced.selectedCells
-            .map(c => gameState.grid[c.row][c.col].letter)
+            .map(c => currentGrid[c.row][c.col].letter)
             .join("")
             .toLowerCase();
+
         if (word.length > 1 && getWordSet().has(word)) {
-            let alreadyMatched = gameState.matchedWords.some(m => m.word === word.toUpperCase());
-            if (!alreadyMatched) {
-                let points = calculateWordScore(this.synced.selectedCells);
-                gameState.score += points;
-                gameState.matchedWords.push({ word: word.toUpperCase(), points });
-                this.synced.pulseCells = this.synced.selectedCells.slice();
-                setTimeout(() => {
-                    this.synced.pulseCells = [];
-                }, 600);
-                let scoreId = this.floatingScoreId++;
-                this.synced.floatingScores.push({ id: scoreId, points, timestamp: Date.now() });
-                setTimeout(() => {
-                    this.synced.floatingScores = this.synced.floatingScores.filter(s => s.id !== scoreId);
-                }, 1000);
+            if (isMultiplayer) {
+                if (!isNode() && multiplayerState.gameId) {
+                    const rpc = getRPCClient();
+                    await rpc.submitWord(multiplayerState.gameId, word.toUpperCase(), this.synced.selectedCells);
+                }
+            } else {
+                let alreadyMatched = gameState.matchedWords.some(m => m.word === word.toUpperCase());
+                if (!alreadyMatched) {
+                    let points = calculateWordScore(this.synced.selectedCells);
+                    gameState.score += points;
+                    gameState.matchedWords.push({ word: word.toUpperCase(), points });
+                    this.synced.pulseCells = this.synced.selectedCells.slice();
+                    setTimeout(() => {
+                        this.synced.pulseCells = [];
+                    }, 600);
+                    let scoreId = this.floatingScoreId++;
+                    this.synced.floatingScores.push({ id: scoreId, points, timestamp: Date.now() });
+                    setTimeout(() => {
+                        this.synced.floatingScores = this.synced.floatingScores.filter(s => s.id !== scoreId);
+                    }, 1000);
+                }
             }
         }
         this.synced.selectedCells = [];
@@ -163,16 +186,24 @@ export class LetterFastGame extends preact.Component {
     };
 
     render() {
+        const isMultiplayer = this.props.multiplayer;
+        const currentState = isMultiplayer ? multiplayerState : gameState;
+        const currentGrid = isMultiplayer ? (multiplayerState.grid || gameState.grid) : gameState.grid;
+        const timeRemaining = isMultiplayer ? multiplayerState.timeRemaining : gameState.timeRemaining;
+        const currentScore = isMultiplayer
+            ? (multiplayerState.myPlayerIndex !== undefined ? multiplayerState.players[multiplayerState.myPlayerIndex]?.score || 0 : 0)
+            : gameState.score;
+
         let gridSize = getCurrentGridSize();
         let totalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
         let totalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
         let currentWord = this.synced.selectedCells
-            .map(c => gameState.grid[c.row][c.col].letter)
+            .map(c => currentGrid[c.row][c.col].letter)
             .join(" ");
 
         this.redraw();
 
-        let timePercent = (gameState.timeRemaining / GAME_DURATION) * 100;
+        let timePercent = (timeRemaining / GAME_DURATION) * 100;
 
         return (
             <div className={css.fillBoth.vbox(20)
@@ -207,7 +238,7 @@ export class LetterFastGame extends preact.Component {
                 <div className={css.hbox(20).alignItems("center").colorhsl(0, 0, 100)}>
                     <div className={css.vbox(4)}>
                         <div className={css.fontSize(32).width(100).textAlign("center")}>
-                            {formatTime(gameState.timeRemaining)}
+                            {formatTime(timeRemaining)}
                         </div>
                         <div className={css.width(100).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
                             <div
@@ -217,7 +248,7 @@ export class LetterFastGame extends preact.Component {
                         </div>
                     </div>
                     <div className={css.fontSize(24).relative}>
-                        Score: {gameState.score}
+                        Score: {currentScore}
                         {this.synced.floatingScores.map(fs => (
                             <div
                                 key={fs.id}
@@ -228,19 +259,38 @@ export class LetterFastGame extends preact.Component {
                             </div>
                         ))}
                     </div>
-                    <button onClick={() => startGame()}>
-                        {gameState.status === "ready" && "Start Game"}
-                        {gameState.status === "playing" && "Restart"}
-                        {gameState.status === "finished" && "Play Again"}
-                    </button>
-                    {gameState.status === "playing" && (
-                        <button onClick={() => endGame()}>
-                            End Now
-                        </button>
+                    {!isMultiplayer && (
+                        <>
+                            <button onClick={() => startGame()}>
+                                {gameState.status === "ready" && "Start Game"}
+                                {gameState.status === "playing" && "Restart"}
+                                {gameState.status === "finished" && "Play Again"}
+                            </button>
+                            {gameState.status === "playing" && (
+                                <button onClick={() => endGame()}>
+                                    End Now
+                                </button>
+                            )}
+                            <button onClick={() => {
+                                pageURL.value = "";
+                            }}>
+                                Back to Menu
+                            </button>
+                        </>
                     )}
-                    <Anchor params={[[pageURL, "config"]]}>
-                        <button>Change Game</button>
-                    </Anchor>
+                    {isMultiplayer && multiplayerState.players.length > 1 && (
+                        <div className={css.vbox(4)}>
+                            <div className={css.fontSize(16)}>Other Players:</div>
+                            {multiplayerState.players
+                                .map((p, index) => ({ p, index }))
+                                .filter(({ index }) => index !== multiplayerState.myPlayerIndex)
+                                .map(({ p, index }) => (
+                                    <div key={p.id} className={css.fontSize(14)}>
+                                        Player {index + 1}: {p.score}
+                                    </div>
+                                ))}
+                        </div>
+                    )}
                 </div>
                 <div className={css.hbox(20).alignItems("start")}>
                     <div className={css.vbox(12)}>
@@ -256,7 +306,7 @@ export class LetterFastGame extends preact.Component {
                                 className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
                                 style={{ display: "grid", gridTemplateColumns: `repeat(${gridSize.width}, ${CELL_SIZE}px)`, gap: `${CELL_GAP}px` }}
                             >
-                                {gameState.grid.map((row, ri) =>
+                                {currentGrid.map((row, ri) =>
                                     row.map((cell, ci) => {
                                         let isSelected = this.isCellSelected(ri, ci);
                                         let isPulsing = this.isCellPulsing(ri, ci);

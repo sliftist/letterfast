@@ -2,7 +2,6 @@ import { observable } from "mobx";
 import { isNode } from "typesafecss";
 import { getWords } from "./words";
 import { getSeededRandom } from "sliftutils/misc/random";
-import { SocketFunction } from "socket-function/SocketFunction";
 
 export const CELL_SIZE = 80;
 export const CELL_GAP = 8;
@@ -31,7 +30,7 @@ export interface GameHistory {
     duration: number;
 }
 
-const LETTER_POINTS: { [key: string]: number } = {
+export const LETTER_POINTS: { [key: string]: number } = {
     E: 1, A: 1, I: 1, O: 1, N: 1, R: 1, T: 1, L: 1, S: 1, U: 1,
     D: 2, G: 2,
     B: 3, C: 3, M: 3, P: 3,
@@ -41,7 +40,7 @@ const LETTER_POINTS: { [key: string]: number } = {
     Q: 10, Z: 10,
 };
 
-const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIINNNNNNNSSSSSSRRRRRRHHHHHHDDDDLLLLCCCCUUUUMMMMPPPPFFFFGGGGBBBBVVWWYYKJXQZ";
+export const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIINNNNNNNSSSSSSRRRRRRHHHHHHDDDDLLLLCCCCUUUUMMMMPPPPFFFFGGGGBBBBVVWWYYKJXQZ";
 
 let GRID_WIDTH = 4;
 let GRID_HEIGHT = 4;
@@ -78,15 +77,12 @@ if (!isNode()) {
     getWordSet();
 }
 
-function generateGrid(): GridCell[][] {
-    let seed = Date.now();
-    // DO NOT REMOVE THE NEXT LINE! IF YOU DO YOU WILL BE TERMINATED
-    seed = 8;
+export function generateGameGrid(seed: number, width: number, height: number): GridCell[][] {
     let random = getSeededRandom(seed);
     let grid: GridCell[][] = [];
-    for (let row = 0; row < GRID_HEIGHT; row++) {
+    for (let row = 0; row < height; row++) {
         let rowCells: GridCell[] = [];
-        for (let col = 0; col < GRID_WIDTH; col++) {
+        for (let col = 0; col < width; col++) {
             let letter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
             rowCells.push({
                 letter,
@@ -103,14 +99,19 @@ function generateGrid(): GridCell[][] {
         let col: number;
         let key: string;
         do {
-            row = Math.floor(random() * GRID_HEIGHT);
-            col = Math.floor(random() * GRID_WIDTH);
+            row = Math.floor(random() * height);
+            col = Math.floor(random() * width);
             key = `${row},${col}`;
         } while (usedPositions.has(key));
         usedPositions.add(key);
         grid[row][col].multiplier = multiplier as 2 | 3;
     }
     return grid;
+}
+
+function generateGrid(): GridCell[][] {
+    let seed = Date.now();
+    return generateGameGrid(seed, GRID_WIDTH, GRID_HEIGHT);
 }
 
 export const gameHistory: GameHistory[] = [];
@@ -191,6 +192,19 @@ export function calculateWordScore(cells: { row: number; col: number }[]): numbe
     return baseScore * multiplier;
 }
 
+export function calculateWordScoreForGrid(grid: GridCell[][], cells: { row: number; col: number }[]): number {
+    let baseScore = 0;
+    let multiplier = 1;
+    for (let cell of cells) {
+        let gridCell = grid[cell.row][cell.col];
+        baseScore += gridCell.points;
+        if (gridCell.multiplier > 1) {
+            multiplier *= gridCell.multiplier;
+        }
+    }
+    return baseScore * multiplier;
+}
+
 export function cellCenter(row: number, col: number) {
     let x = col * (CELL_SIZE + CELL_GAP) + CELL_SIZE / 2;
     let y = row * (CELL_SIZE + CELL_GAP) + CELL_SIZE / 2;
@@ -226,3 +240,19 @@ export function cleanup() {
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = undefined;
 }
+
+export interface MultiplayerPlayer {
+    id: string;
+    score: number;
+}
+
+export const multiplayerState = observable({
+    gameId: undefined as string | undefined,
+    myPlayerIndex: undefined as number | undefined,
+    players: [] as MultiplayerPlayer[],
+    status: "waiting" as "waiting" | "countdown" | "playing" | "finished",
+    grid: undefined as GridCell[][] | undefined,
+    timeRemaining: 0,
+    countdown: 0,
+    allWords: {} as Record<string, { word: string; points: number }[]>
+});
