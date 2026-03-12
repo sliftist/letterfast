@@ -1,0 +1,27 @@
+
+- Online play
+    - Synchronized play (playing at the same time)
+        - Countdown timer
+    - Show scores
+    - At the end show end screen
+
+- Remove fixed seed
+
+- Mobile UI
+    - if the ui is small enough, hide the word list
+        - also add an option to manually hide it, which we remember in local storage
+    - tactile feedback
+    - Deploy as static site and test on phone
+
+- Better UI
+
+- Make it so that start click area is larger for the first letter.
+
+- Sounds
+
+- Saved state, so you can refresh and not break a multiplayer game
+
+- History mode, which will let you view the finish screen for old games 
+    - Change the finish screen so it's inline, instead of using a popup
+
+- Penalty for wrong words
