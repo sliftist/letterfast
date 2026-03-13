@@ -29,6 +29,7 @@ export interface GameState {
     timeRemaining: number;
     score: number;
     matchedWords: { word: string; points: number }[];
+    matchedWordsSet: Set<string>;
     isMultiplayer: boolean;
     gameId: string | undefined;
     myPlayerIndex: number | undefined;
@@ -41,6 +42,7 @@ export interface GameState {
     timeoutUntil: number;
     totalPossibleWords: number;
     totalPossibleScore: number;
+    cellToWords: Map<string, Set<string>>;
 }
 
 export interface GameHistory {
@@ -88,6 +90,7 @@ async function generateGrid(): Promise<GridCell[][]> {
     let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
     gameState.totalPossibleWords = result.totalPossibleWords;
     gameState.totalPossibleScore = result.totalPossibleScore;
+    gameState.cellToWords = result.cellToWords;
     return result.grid;
 }
 
@@ -101,6 +104,7 @@ export const gameState = observable<GameState>({
     timeRemaining: initialConfig.gameDuration,
     score: 0,
     matchedWords: [],
+    matchedWordsSet: new Set<string>(),
     isMultiplayer: false,
     gameId: undefined,
     myPlayerIndex: undefined,
@@ -113,6 +117,7 @@ export const gameState = observable<GameState>({
     timeoutUntil: 0,
     totalPossibleWords: 0,
     totalPossibleScore: 0,
+    cellToWords: new Map<string, Set<string>>(),
 });
 
 void generateGrid().then(grid => {
@@ -132,6 +137,7 @@ export async function startGame(regenerateGrid = true, duration?: number) {
     gameState.timeRemaining = gameState.gameDuration;
     gameState.score = 0;
     gameState.matchedWords = [];
+    gameState.matchedWordsSet.clear();
     gameState.consecutiveWrongWords = 0;
     gameState.timeoutUntil = 0;
     if (timerInterval) clearInterval(timerInterval);
@@ -170,6 +176,7 @@ export async function changeGridSize(config: { width: number; height: number }) 
     gameState.status = "ready";
     gameState.score = 0;
     gameState.matchedWords = [];
+    gameState.matchedWordsSet.clear();
     gameState.timeRemaining = gameState.gameDuration;
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = undefined;

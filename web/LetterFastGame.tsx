@@ -338,6 +338,20 @@ export class LetterFastGame extends preact.Component {
         return this.synced.pulseCells.some(c => c.row === row && c.col === col);
     }
 
+    isCellExhausted(row: number, col: number): string | undefined {
+        const key = `${row},${col}`;
+        const wordsForCell = gameState.cellToWords.get(key);
+        if (!wordsForCell) return undefined;
+
+        for (let word of wordsForCell) {
+            if (!gameState.matchedWordsSet.has(word)) {
+                return word;
+            }
+        }
+
+        return undefined;
+    }
+
     handleSelectionStart = async (pos: { x: number; y: number }) => {
         if (gameState.status === "ready") {
             await startGame(false);
@@ -472,20 +486,38 @@ export class LetterFastGame extends preact.Component {
                 const rpc = getRPCClient();
                 const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), this.synced.selectedCells);
                 if (result.points > 0) {
-                    gameState.matchedWords.push({ word: word.toUpperCase(), points: result.points });
+                    const upperWord = word.toUpperCase();
+                    gameState.matchedWords.push({ word: upperWord, points: result.points });
+                    gameState.matchedWordsSet.add(upperWord);
                     this.showWordAcceptedFeedback(result.points);
                 }
             }
             return;
         }
 
-        let alreadyMatched = gameState.matchedWords.some(m => m.word === word.toUpperCase());
-        if (alreadyMatched) return;
+        const upperWord = word.toUpperCase();
+        if (gameState.matchedWordsSet.has(upperWord)) return;
 
         let points = calculateWordScore(this.synced.selectedCells);
         gameState.score += points;
-        gameState.matchedWords.push({ word: word.toUpperCase(), points });
+        gameState.matchedWords.push({ word: upperWord, points });
+        gameState.matchedWordsSet.add(upperWord);
         this.showWordAcceptedFeedback(points);
+
+        // Useful for debugging
+        /*
+        let remainingExamples: string[] = [];
+        const gridSize = getCurrentGridSize();
+        for (let row = 0; row < gridSize.height; row++) {
+            for (let col = 0; col < gridSize.width; col++) {
+                const letter = gameState.grid[row][col].letter;
+                const remainingWord = this.isCellExhausted(row, col);
+                if (!remainingWord) continue;
+                remainingExamples.push(`${letter}: ${remainingWord}`);
+            }
+        }
+        console.log(`Remaining words:`, remainingExamples.join(" | "));
+        */
     };
 
     handleSelectionEnd = async () => {
@@ -668,6 +700,7 @@ export class LetterFastGame extends preact.Component {
                         row.map((cell, ci) => {
                             let isSelected = this.isCellSelected(ri, ci);
                             let isPulsing = this.isCellPulsing(ri, ci);
+                            let isExhausted = !this.isCellExhausted(ri, ci);
                             return (
                                 <div
                                     key={`${ri}-${ci}`}
@@ -679,6 +712,7 @@ export class LetterFastGame extends preact.Component {
                                             .background("linear-gradient(135deg, rgba(0,200,255,0.3) 0%, rgba(255,0,200,0.3) 100%), #0a0a1f")
                                             || css.hsl(0, 0, 95).colorhsl(0, 0, 0)
                                         )
+                                        + (isExhausted && css.opacity(0.3))
                                     }
                                     style={{
                                         border: isSelected && "3px solid transparent" || "3px solid #ddd",

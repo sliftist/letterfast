@@ -194,6 +194,7 @@ export const clientHandlers = {
         gameState.timeRemaining = duration;
         gameState.isMultiplayer = true;
         gameState.matchedWords = [];
+        gameState.matchedWordsSet.clear();
         gameState.allWords = {};
         gameState.totalPossibleWords = totalPossibleWords;
         gameState.totalPossibleScore = totalPossibleScore;
@@ -222,6 +223,10 @@ export const clientHandlers = {
         const myPlayerId = gameState.myPlayerIndex !== undefined ? players[gameState.myPlayerIndex]?.id : undefined;
         if (myPlayerId && allWords[myPlayerId]) {
             gameState.matchedWords = allWords[myPlayerId];
+            gameState.matchedWordsSet.clear();
+            for (let wordData of allWords[myPlayerId]) {
+                gameState.matchedWordsSet.add(wordData.word);
+            }
         }
         pageURL.value = "lobby";
     },

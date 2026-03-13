@@ -28,6 +28,7 @@ We use MobX for state management. Components should use a variable called synced
 
 
 Functions MUST satisfy their function. If they cannot, they must throw. Don't add all these if statements all over the place to make things no op if somehow nothing is loaded and nothing's working. This doesn't make things better. This creates a bug. These if statements that no op things are bugs because they break the code, the functions don't function correctly, and they don't throw, so it's very hard to debug. They are intentional sabotage, and you must never add any if statements to no op if something that should exist does not exist. If there's a type error, You probably need a check to see if it's undefined, and if it is, then you throw. Unless it's something that is optional. But most functions aren't doing optional things, and most functions should never no op.
+    NEVER default to some random value that you think will prevent an error. Trying to inject values to hide bugs is literally sabotaging the code base and is unacceptable.
 
 NEVER Change any observables in the Render function or component did update. We are explicitly setting all Observables after calling async functions and so if we want to check for their value, we should do it before we set it.
 

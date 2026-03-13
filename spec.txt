@@ -1,6 +1,4 @@
 
-A mode where we show when letters have all possible words on them found?
-
 Show endpoint errors in the client, automatically reconnect to the server, and show when we are disconnected.
 
 Better game lobby display

@@ -5,7 +5,7 @@ import { getSeededRandom } from "sliftutils/misc/random";
 const VOWELS = "AEIOU";
 const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
 
-export const MIN_WORDS_PER_LETTER = 10;
+export const MIN_WORDS_PER_LETTER = 20;
 export const MAX_OPTIMIZATION_SWAPS = 50;
 const MAX_WORD_SEARCH_ITERATIONS = 1000000;
 
@@ -70,8 +70,9 @@ async function loadWordData(): Promise<void> {
     return wordSetPromise;
 }
 
-function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; iterations: number; hitLimit: boolean } {
+function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
     let foundWords = new Set<string>();
+    let wordPaths = new Map<string, Set<string>>();
     let height = grid.length;
     let width = grid[0].length;
     let iterations = 0;
@@ -89,7 +90,16 @@ function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string
         }
 
         if (word.length >= 3 && trie.isWord(word)) {
-            foundWords.add(word.toLowerCase());
+            let lowerWord = word.toLowerCase();
+            foundWords.add(lowerWord);
+            let cellsSet = wordPaths.get(lowerWord);
+            if (!cellsSet) {
+                cellsSet = new Set<string>();
+                wordPaths.set(lowerWord, cellsSet);
+            }
+            for (let cell of path) {
+                cellsSet.add(`${cell.row},${cell.col}`);
+            }
         }
         if (word.length >= 12) return;
 
@@ -121,53 +131,9 @@ function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string
         if (hitLimit) break;
     }
 
-    return { words: foundWords, iterations, hitLimit };
+    return { words: foundWords, wordPaths, iterations, hitLimit };
 }
 
-function countWordsWithoutCell(grid: GridCell[][], trie: Trie, excludeRow: number, excludeCol: number): number {
-    let height = grid.length;
-    let width = grid[0].length;
-    let foundWords = new Set<string>();
-
-    function dfs(path: { row: number; col: number }[], word: string, visited: Set<string>) {
-        if (!trie.hasPrefix(word)) {
-            return;
-        }
-
-        if (word.length >= 3 && trie.isWord(word)) {
-            foundWords.add(word.toLowerCase());
-        }
-        if (word.length >= 12) return;
-
-        let lastCell = path[path.length - 1];
-        for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
-                if (dr === 0 && dc === 0) continue;
-                let newRow = lastCell.row + dr;
-                let newCol = lastCell.col + dc;
-                if (newRow < 0 || newRow >= height || newCol < 0 || newCol >= width) continue;
-                if (newRow === excludeRow && newCol === excludeCol) continue;
-                let key = `${newRow},${newCol}`;
-                if (visited.has(key)) continue;
-                let newWord = word + grid[newRow][newCol].letter;
-                visited.add(key);
-                dfs([...path, { row: newRow, col: newCol }], newWord, visited);
-                visited.delete(key);
-            }
-        }
-    }
-
-    for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-            if (row === excludeRow && col === excludeCol) continue;
-            let visited = new Set<string>();
-            visited.add(`${row},${col}`);
-            dfs([{ row, col }], grid[row][col].letter, visited);
-        }
-    }
-
-    return foundWords.size;
-}
 
 function placeSeedWord(grid: GridCell[][], wordSet: Set<string>, random: () => number): void {
     let height = grid.length;
@@ -294,60 +260,61 @@ export interface GridMetadata {
     grid: GridCell[][];
     totalPossibleWords: number;
     totalPossibleScore: number;
+    cellToWords: Map<string, Set<string>>;
+}
+
+function findWordPathInGrid(grid: GridCell[][], word: string): { row: number; col: number }[] | undefined {
+    let height = grid.length;
+    let width = grid[0].length;
+
+    function dfs(path: { row: number; col: number }[], wordIndex: number, visited: Set<string>): boolean {
+        if (wordIndex === word.length) {
+            return true;
+        }
+
+        if (path.length === 0) {
+            return false;
+        }
+
+        let lastCell = path[path.length - 1];
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                let newRow = lastCell.row + dr;
+                let newCol = lastCell.col + dc;
+                if (newRow < 0 || newRow >= height || newCol < 0 || newCol >= width) continue;
+                let key = `${newRow},${newCol}`;
+                if (visited.has(key)) continue;
+                if (grid[newRow][newCol].letter !== word[wordIndex].toUpperCase()) continue;
+                visited.add(key);
+                path.push({ row: newRow, col: newCol });
+                if (dfs(path, wordIndex + 1, visited)) return true;
+                path.pop();
+                visited.delete(key);
+            }
+        }
+        return false;
+    }
+
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            if (grid[row][col].letter !== word[0].toUpperCase()) continue;
+            let visited = new Set<string>();
+            visited.add(`${row},${col}`);
+            let path = [{ row, col }];
+            if (dfs(path, 1, visited)) {
+                return path;
+            }
+        }
+    }
+    return undefined;
 }
 
 function calculateTotalScoreForWords(grid: GridCell[][], words: Set<string>, trie: Trie): number {
     let totalScore = 0;
 
-    function findWordPath(word: string): { row: number; col: number }[] | undefined {
-        let height = grid.length;
-        let width = grid[0].length;
-
-        function dfs(path: { row: number; col: number }[], wordIndex: number, visited: Set<string>): boolean {
-            if (wordIndex === word.length) {
-                return true;
-            }
-
-            if (path.length === 0) {
-                return false;
-            }
-
-            let lastCell = path[path.length - 1];
-            for (let dr = -1; dr <= 1; dr++) {
-                for (let dc = -1; dc <= 1; dc++) {
-                    if (dr === 0 && dc === 0) continue;
-                    let newRow = lastCell.row + dr;
-                    let newCol = lastCell.col + dc;
-                    if (newRow < 0 || newRow >= height || newCol < 0 || newCol >= width) continue;
-                    let key = `${newRow},${newCol}`;
-                    if (visited.has(key)) continue;
-                    if (grid[newRow][newCol].letter !== word[wordIndex].toUpperCase()) continue;
-                    visited.add(key);
-                    path.push({ row: newRow, col: newCol });
-                    if (dfs(path, wordIndex + 1, visited)) return true;
-                    path.pop();
-                    visited.delete(key);
-                }
-            }
-            return false;
-        }
-
-        for (let row = 0; row < height; row++) {
-            for (let col = 0; col < width; col++) {
-                if (grid[row][col].letter !== word[0].toUpperCase()) continue;
-                let visited = new Set<string>();
-                visited.add(`${row},${col}`);
-                let path = [{ row, col }];
-                if (dfs(path, 1, visited)) {
-                    return path;
-                }
-            }
-        }
-        return undefined;
-    }
-
     for (let word of words) {
-        let path = findWordPath(word);
+        let path = findWordPathInGrid(grid, word);
         if (path) {
             let baseScore = 0;
             let multiplier = 1;
@@ -400,8 +367,13 @@ export async function generateGameGrid(seed: number, width: number, height: numb
 
             for (let row = 0; row < height; row++) {
                 for (let col = 0; col < width; col++) {
-                    let wordsWithoutCell = countWordsWithoutCell(grid, wordTrie, row, col);
-                    let contribution = totalWords - wordsWithoutCell;
+                    let cellKey = `${row},${col}`;
+                    let contribution = 0;
+                    for (let [word, cells] of initialResult.wordPaths) {
+                        if (cells.has(cellKey)) {
+                            contribution++;
+                        }
+                    }
                     let letter = grid[row][col].letter;
 
                     if (!leastUsefulCell || contribution < leastUsefulCell.contribution) {
@@ -437,6 +409,7 @@ export async function generateGameGrid(seed: number, width: number, height: numb
                 grid[leastUsefulCell.row][leastUsefulCell.col].points = LETTER_POINTS[oldLetter] || 1;
             } else {
                 totalWords = newTotalWords;
+                initialResult = newResult;
             }
         }
     }
@@ -444,11 +417,26 @@ export async function generateGameGrid(seed: number, width: number, height: numb
     placeSeedWord(grid, wordSet, random);
 
     let finalResult = findAllWordsInGrid(grid, wordTrie);
+    let cellToWords = new Map<string, Set<string>>();
+
+    for (let [word, cells] of finalResult.wordPaths) {
+        let upperWord = word.toUpperCase();
+        for (let cellKey of cells) {
+            let wordsSet = cellToWords.get(cellKey);
+            if (!wordsSet) {
+                wordsSet = new Set<string>();
+                cellToWords.set(cellKey, wordsSet);
+            }
+            wordsSet.add(upperWord);
+        }
+    }
+
     let finalContributions: { row: number; col: number; letter: string; contribution: number }[] = [];
     for (let row = 0; row < height; row++) {
         for (let col = 0; col < width; col++) {
-            let wordsWithoutCell = countWordsWithoutCell(grid, wordTrie, row, col);
-            let contribution = finalResult.words.size - wordsWithoutCell;
+            let cellKey = `${row},${col}`;
+            let wordsForCell = cellToWords.get(cellKey);
+            let contribution = wordsForCell ? wordsForCell.size : 0;
             let letter = grid[row][col].letter;
             finalContributions.push({ row, col, letter, contribution });
         }
@@ -479,5 +467,6 @@ export async function generateGameGrid(seed: number, width: number, height: numb
         grid,
         totalPossibleWords,
         totalPossibleScore,
+        cellToWords,
     };
 }
