@@ -5,9 +5,11 @@ import { getSeededRandom } from "sliftutils/misc/random";
 
 export const CELL_SIZE = 80;
 export const CELL_GAP = 8;
-export const HIT_SIZE = 60;
+export const HIT_SIZE = 55;
 export const HIT_OFFSET = (CELL_SIZE - HIT_SIZE) / 2;
 export const GAME_DURATION = 90000;
+export const MIN_VOWEL_FRACTION = 0.16;
+export const MIN_CONSONANT_FRACTION = 0.40;
 
 export interface GridCell {
     letter: string;
@@ -34,6 +36,8 @@ export interface GameState {
     gameDuration: number;
     gridWidth: number;
     gridHeight: number;
+    consecutiveWrongWords: number;
+    timeoutUntil: number;
 }
 
 export interface GameHistory {
@@ -55,6 +59,8 @@ export const LETTER_POINTS: { [key: string]: number } = {
 
 export const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIINNNNNNNSSSSSSRRRRRRHHHHHHDDDDLLLLCCCCUUUUMMMMPPPPFFFFGGGGBBBBVVWWYYKJXQZ";
 
+const VOWELS = "AEIOU";
+const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
 
 let wordSet: Set<string> | undefined;
 let wordSetPromise: Promise<Set<string>> | undefined;
@@ -81,6 +87,10 @@ if (!isNode()) {
 export function generateGameGrid(seed: number, width: number, height: number): GridCell[][] {
     let random = getSeededRandom(seed);
     let grid: GridCell[][] = [];
+    let totalCells = width * height;
+    let minVowels = Math.ceil(totalCells * MIN_VOWEL_FRACTION);
+    let minConsonants = Math.ceil(totalCells * MIN_CONSONANT_FRACTION);
+
     for (let row = 0; row < height; row++) {
         let rowCells: GridCell[] = [];
         for (let col = 0; col < width; col++) {
@@ -93,6 +103,63 @@ export function generateGameGrid(seed: number, width: number, height: number): G
         }
         grid.push(rowCells);
     }
+
+    let vowelCount = 0;
+    let consonantCount = 0;
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            let letter = grid[row][col].letter;
+            if (VOWELS.includes(letter)) {
+                vowelCount++;
+            }
+            if (CONSONANTS.includes(letter)) {
+                consonantCount++;
+            }
+        }
+    }
+
+    if (vowelCount < minVowels) {
+        let needed = minVowels - vowelCount;
+        for (let i = 0; i < needed; i++) {
+            let row = Math.floor(random() * height);
+            let col = Math.floor(random() * width);
+            let letter = grid[row][col].letter;
+            if (!VOWELS.includes(letter)) {
+                let vowel = VOWELS[Math.floor(random() * VOWELS.length)];
+                grid[row][col].letter = vowel;
+                grid[row][col].points = LETTER_POINTS[vowel] || 1;
+            }
+        }
+    }
+
+    vowelCount = 0;
+    consonantCount = 0;
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            let letter = grid[row][col].letter;
+            if (VOWELS.includes(letter)) {
+                vowelCount++;
+            }
+            if (CONSONANTS.includes(letter)) {
+                consonantCount++;
+            }
+        }
+    }
+
+    if (consonantCount < minConsonants) {
+        let needed = minConsonants - consonantCount;
+        for (let i = 0; i < needed; i++) {
+            let row = Math.floor(random() * height);
+            let col = Math.floor(random() * width);
+            let letter = grid[row][col].letter;
+            if (!CONSONANTS.includes(letter)) {
+                let consonant = CONSONANTS[Math.floor(random() * CONSONANTS.length)];
+                grid[row][col].letter = consonant;
+                grid[row][col].points = LETTER_POINTS[consonant] || 1;
+            }
+        }
+    }
+
     let multipliersToAdd = [2, 2, 3];
     let usedPositions = new Set<string>();
     for (let multiplier of multipliersToAdd) {
@@ -130,6 +197,8 @@ export const gameState = observable<GameState>({
     gameDuration: GAME_DURATION,
     gridWidth: 4,
     gridHeight: 4,
+    consecutiveWrongWords: 0,
+    timeoutUntil: 0,
 });
 gameState.grid = generateGrid();
 
@@ -146,6 +215,8 @@ export function startGame(regenerateGrid = true, duration?: number) {
     gameState.timeRemaining = gameState.gameDuration;
     gameState.score = 0;
     gameState.matchedWords = [];
+    gameState.consecutiveWrongWords = 0;
+    gameState.timeoutUntil = 0;
     if (timerInterval) clearInterval(timerInterval);
     let startTime = Date.now();
     timerInterval = window.setInterval(() => {

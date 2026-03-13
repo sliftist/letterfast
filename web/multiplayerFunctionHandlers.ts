@@ -193,6 +193,8 @@ export const clientHandlers = {
         gameState.gameDuration = duration;
         gameState.timeRemaining = duration;
         gameState.isMultiplayer = true;
+        gameState.matchedWords = [];
+        gameState.allWords = {};
 
         const updateTimer = () => {
             if (gameState.status !== "playing") return;

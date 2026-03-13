@@ -158,6 +158,7 @@ export class GameConfig extends preact.Component {
             await rpc.joinGame(this.synced.gameIdToJoin.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
             gameState.gameId = this.synced.gameIdToJoin.toUpperCase();
             gameState.isMultiplayer = true;
+            joinGameIdURL.value = this.synced.gameIdToJoin.toUpperCase();
             pageURL.value = "lobby";
         } catch (error) {
             this.synced.error = error instanceof Error ? error.message : String(error);
@@ -329,6 +330,11 @@ export class GameConfig extends preact.Component {
                                 value={this.synced.gameIdToJoin}
                                 onInput={(e) => {
                                     this.synced.gameIdToJoin = e.currentTarget.value;
+                                }}
+                                onKeyDown={async (e) => {
+                                    if (e.key === "Enter") {
+                                        await this.onJoinGame();
+                                    }
                                 }}
                                 className={css.fontSize(20).pad2(12).textTransform("uppercase").width(150) + ""}
                             />
