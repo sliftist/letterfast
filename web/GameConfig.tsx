@@ -6,15 +6,15 @@ import { changeGridSize, getCurrentGridSize, gameState } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
 
-const STORAGE_KEY = "letterfast_game_config";
+export const STORAGE_KEY = "letterfast_game_config";
 
-interface SavedConfig {
+export interface SavedConfig {
     gridWidth: number;
     gridHeight: number;
     gameDuration: number;
 }
 
-function loadSavedConfig(): SavedConfig | undefined {
+export function loadSavedConfig(): SavedConfig | undefined {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (!saved) return undefined;
@@ -30,7 +30,7 @@ function loadSavedConfig(): SavedConfig | undefined {
     return undefined;
 }
 
-function saveConfig(config: SavedConfig): void {
+export function saveConfig(config: SavedConfig): void {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     } catch (error) {
@@ -87,10 +87,10 @@ export class GameConfig extends preact.Component {
         }
     }
 
-    startSinglePlayerGame = (config: { width: number; height: number }) => {
+    startSinglePlayerGame = async (config: { width: number; height: number }) => {
         this.synced.customWidth = config.width;
         this.synced.customHeight = config.height;
-        changeGridSize(config);
+        await changeGridSize(config);
         gameState.gameDuration = this.synced.gameDuration;
         gameState.timeRemaining = this.synced.gameDuration;
         pageURL.value = "game";
@@ -102,8 +102,8 @@ export class GameConfig extends preact.Component {
         await this.onCreateGame();
     };
 
-    onStartSinglePlayer = () => {
-        changeGridSize({
+    onStartSinglePlayer = async () => {
+        await changeGridSize({
             width: this.synced.customWidth,
             height: this.synced.customHeight,
         });
@@ -117,7 +117,7 @@ export class GameConfig extends preact.Component {
         this.synced.error = undefined;
 
         try {
-            changeGridSize({
+            await changeGridSize({
                 width: this.synced.customWidth,
                 height: this.synced.customHeight,
             });
@@ -187,7 +187,7 @@ export class GameConfig extends preact.Component {
                             <div className={css.hbox(12)}>
                                 <button
                                     className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={() => this.startSinglePlayerGame({ width: 3, height: 3 })}
+                                    onClick={async () => await this.startSinglePlayerGame({ width: 3, height: 3 })}
                                 >
                                     3x3 Classic Mode
                                 </button>
@@ -203,7 +203,7 @@ export class GameConfig extends preact.Component {
                             <div className={css.hbox(12)}>
                                 <button
                                     className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={() => this.startSinglePlayerGame({ width: 4, height: 4 })}
+                                    onClick={async () => await this.startSinglePlayerGame({ width: 4, height: 4 })}
                                 >
                                     4x4 Standard Mode
                                 </button>
@@ -219,7 +219,7 @@ export class GameConfig extends preact.Component {
                             <div className={css.hbox(12)}>
                                 <button
                                     className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={() => this.startSinglePlayerGame({ width: 5, height: 5 })}
+                                    onClick={async () => await this.startSinglePlayerGame({ width: 5, height: 5 })}
                                 >
                                     5x5 Extended Mode
                                 </button>
@@ -271,10 +271,10 @@ export class GameConfig extends preact.Component {
                             />
                             <button
                                 className={css.fontSize(18).pad2(12) + ""}
-                                onClick={() => {
+                                onClick={async () => {
                                     if (this.synced.customWidth >= 2 && this.synced.customWidth <= 10
                                         && this.synced.customHeight >= 2 && this.synced.customHeight <= 10) {
-                                        this.onStartSinglePlayer();
+                                        await this.onStartSinglePlayer();
                                     }
                                 }}
                             >

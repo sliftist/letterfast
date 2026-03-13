@@ -25,7 +25,7 @@ const serverHandlers = {
             throw new Error(`No active caller`);
         }
 
-        const result = GameManager.createGame(playerCount, player);
+        const result = await GameManager.createGame(playerCount, player);
         setupPlayerDisconnect(result.gameId, player);
 
         const players = GameManager.getPlayerScores(result.gameId);
@@ -67,7 +67,7 @@ const serverHandlers = {
 
         let game = GameManager.getGame(sanitized);
         if (!game) {
-            GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration);
+            await GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration);
             game = GameManager.getGame(sanitized);
         } else {
             GameManager.joinGame(sanitized, player);
@@ -86,7 +86,7 @@ const serverHandlers = {
 
 
                 if (game.status === "playing" && game.startTime) {
-                    void player.onGameStart(sanitized, game.grid, game.startTime, game.gameDuration);
+                    void player.onGameStart(sanitized, game.grid, game.startTime, game.gameDuration, game.totalPossibleWords, game.totalPossibleScore);
                 }
             });
         }
@@ -104,14 +104,14 @@ const serverHandlers = {
         }
 
         GameManager.validateStartGame(gameId, player);
-        GameManager.startGamePlaying(gameId);
+        await GameManager.startGamePlaying(gameId);
         const updatedGame = GameManager.getGame(gameId);
         if (!updatedGame) {
             throw new Error(`Game ${gameId} not found after starting`);
         }
 
         GameManager.broadcastToGame(gameId, (client) => {
-            void client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration);
+            void client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
         });
 
         setTimeout(() => {
@@ -186,7 +186,7 @@ export const clientHandlers = {
         }
     },
 
-    async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number): Promise<void> {
+    async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {
         if (gameState.gameId !== gameId) return;
         gameState.grid = grid;
         gameState.status = "playing";
@@ -195,6 +195,8 @@ export const clientHandlers = {
         gameState.isMultiplayer = true;
         gameState.matchedWords = [];
         gameState.allWords = {};
+        gameState.totalPossibleWords = totalPossibleWords;
+        gameState.totalPossibleScore = totalPossibleScore;
 
         const updateTimer = () => {
             if (gameState.status !== "playing") return;
@@ -238,7 +240,7 @@ const clientHandlersNoOp: ClientHandlers = {
     async onPlayerUpdate(gameId: string, players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
     },
 
-    async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number): Promise<void> {
+    async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {
     },
 
     async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {

@@ -1,15 +1,16 @@
 import { observable } from "mobx";
 import { isNode } from "typesafecss";
 import { getWords } from "./words";
-import { getSeededRandom } from "sliftutils/misc/random";
+import { generateGameGrid } from "./GridGenerator";
+import { getSavedConfigOrDefaults } from "./GameConfig";
 
 export const CELL_SIZE = 80;
 export const CELL_GAP = 8;
 export const HIT_SIZE = 55;
 export const HIT_OFFSET = (CELL_SIZE - HIT_SIZE) / 2;
 export const GAME_DURATION = 90000;
-export const MIN_VOWEL_FRACTION = 0.16;
-export const MIN_CONSONANT_FRACTION = 0.40;
+export const MIN_VOWEL_FRACTION = 0.20;
+export const MAX_VOWEL_FRACTION = 0.45;
 
 export interface GridCell {
     letter: string;
@@ -38,6 +39,8 @@ export interface GameState {
     gridHeight: number;
     consecutiveWrongWords: number;
     timeoutUntil: number;
+    totalPossibleWords: number;
+    totalPossibleScore: number;
 }
 
 export interface GameHistory {
@@ -59,9 +62,6 @@ export const LETTER_POINTS: { [key: string]: number } = {
 
 export const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIINNNNNNNSSSSSSRRRRRRHHHHHHDDDDLLLLCCCCUUUUMMMMPPPPFFFFGGGGBBBBVVWWYYKJXQZ";
 
-const VOWELS = "AEIOU";
-const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
-
 let wordSet: Set<string> | undefined;
 let wordSetPromise: Promise<Set<string>> | undefined;
 
@@ -78,115 +78,27 @@ export async function getWordSet(): Promise<Set<string>> {
 }
 
 if (!isNode()) {
-    // Preload
     setImmediate(() => {
         void getWordSet();
     });
 }
 
-export function generateGameGrid(seed: number, width: number, height: number): GridCell[][] {
-    let random = getSeededRandom(seed);
-    let grid: GridCell[][] = [];
-    let totalCells = width * height;
-    let minVowels = Math.ceil(totalCells * MIN_VOWEL_FRACTION);
-    let minConsonants = Math.ceil(totalCells * MIN_CONSONANT_FRACTION);
-
-    for (let row = 0; row < height; row++) {
-        let rowCells: GridCell[] = [];
-        for (let col = 0; col < width; col++) {
-            let letter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
-            rowCells.push({
-                letter,
-                points: LETTER_POINTS[letter] || 1,
-                multiplier: 1,
-            });
-        }
-        grid.push(rowCells);
-    }
-
-    let vowelCount = 0;
-    let consonantCount = 0;
-    for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-            let letter = grid[row][col].letter;
-            if (VOWELS.includes(letter)) {
-                vowelCount++;
-            }
-            if (CONSONANTS.includes(letter)) {
-                consonantCount++;
-            }
-        }
-    }
-
-    if (vowelCount < minVowels) {
-        let needed = minVowels - vowelCount;
-        for (let i = 0; i < needed; i++) {
-            let row = Math.floor(random() * height);
-            let col = Math.floor(random() * width);
-            let letter = grid[row][col].letter;
-            if (!VOWELS.includes(letter)) {
-                let vowel = VOWELS[Math.floor(random() * VOWELS.length)];
-                grid[row][col].letter = vowel;
-                grid[row][col].points = LETTER_POINTS[vowel] || 1;
-            }
-        }
-    }
-
-    vowelCount = 0;
-    consonantCount = 0;
-    for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-            let letter = grid[row][col].letter;
-            if (VOWELS.includes(letter)) {
-                vowelCount++;
-            }
-            if (CONSONANTS.includes(letter)) {
-                consonantCount++;
-            }
-        }
-    }
-
-    if (consonantCount < minConsonants) {
-        let needed = minConsonants - consonantCount;
-        for (let i = 0; i < needed; i++) {
-            let row = Math.floor(random() * height);
-            let col = Math.floor(random() * width);
-            let letter = grid[row][col].letter;
-            if (!CONSONANTS.includes(letter)) {
-                let consonant = CONSONANTS[Math.floor(random() * CONSONANTS.length)];
-                grid[row][col].letter = consonant;
-                grid[row][col].points = LETTER_POINTS[consonant] || 1;
-            }
-        }
-    }
-
-    let multipliersToAdd = [2, 2, 3];
-    let usedPositions = new Set<string>();
-    for (let multiplier of multipliersToAdd) {
-        let row: number;
-        let col: number;
-        let key: string;
-        do {
-            row = Math.floor(random() * height);
-            col = Math.floor(random() * width);
-            key = `${row},${col}`;
-        } while (usedPositions.has(key));
-        usedPositions.add(key);
-        grid[row][col].multiplier = multiplier as 2 | 3;
-    }
-    return grid;
-}
-
-function generateGrid(): GridCell[][] {
+async function generateGrid(): Promise<GridCell[][]> {
     let seed = Date.now();
-    return generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
+    let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
+    gameState.totalPossibleWords = result.totalPossibleWords;
+    gameState.totalPossibleScore = result.totalPossibleScore;
+    return result.grid;
 }
 
 export const gameHistory: GameHistory[] = [];
+
+const initialConfig = isNode() ? { gridWidth: 4, gridHeight: 4, gameDuration: GAME_DURATION } : getSavedConfigOrDefaults();
+
 export const gameState = observable<GameState>({
     status: "ready",
     grid: [],
-    timeRemaining: GAME_DURATION,
+    timeRemaining: initialConfig.gameDuration,
     score: 0,
     matchedWords: [],
     isMultiplayer: false,
@@ -194,23 +106,28 @@ export const gameState = observable<GameState>({
     myPlayerIndex: undefined,
     players: [],
     allWords: {},
-    gameDuration: GAME_DURATION,
-    gridWidth: 4,
-    gridHeight: 4,
+    gameDuration: initialConfig.gameDuration,
+    gridWidth: initialConfig.gridWidth,
+    gridHeight: initialConfig.gridHeight,
     consecutiveWrongWords: 0,
     timeoutUntil: 0,
+    totalPossibleWords: 0,
+    totalPossibleScore: 0,
 });
-gameState.grid = generateGrid();
+
+void generateGrid().then(grid => {
+    gameState.grid = grid;
+});
 
 let timerInterval: number | undefined;
 
-export function startGame(regenerateGrid = true, duration?: number) {
+export async function startGame(regenerateGrid = true, duration?: number) {
     gameState.status = "playing";
     if (duration !== undefined) {
         gameState.gameDuration = duration;
     }
     if (regenerateGrid) {
-        gameState.grid = generateGrid();
+        gameState.grid = await generateGrid();
     }
     gameState.timeRemaining = gameState.gameDuration;
     gameState.score = 0;
@@ -240,7 +157,7 @@ export function endGame() {
     });
 }
 
-export function changeGridSize(config: { width: number; height: number }) {
+export async function changeGridSize(config: { width: number; height: number }) {
     if (config.width < 2 || config.width > 10) {
         throw new Error(`Grid width must be between 2 and 10, was ${config.width}`);
     }
@@ -249,7 +166,7 @@ export function changeGridSize(config: { width: number; height: number }) {
     }
     gameState.gridWidth = config.width;
     gameState.gridHeight = config.height;
-    gameState.grid = generateGrid();
+    gameState.grid = await generateGrid();
     gameState.status = "ready";
     gameState.score = 0;
     gameState.matchedWords = [];

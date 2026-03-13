@@ -23,8 +23,10 @@ import {
     getWordSet,
     cleanup,
     GridCell,
+    changeGridSize,
 } from "./GameState";
 import { getRPCClient } from "./rpcClient";
+import { getSavedConfigOrDefaults, saveConfig } from "./GameConfig";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
@@ -336,9 +338,9 @@ export class LetterFastGame extends preact.Component {
         return this.synced.pulseCells.some(c => c.row === row && c.col === col);
     }
 
-    handleSelectionStart = (pos: { x: number; y: number }) => {
+    handleSelectionStart = async (pos: { x: number; y: number }) => {
         if (gameState.status === "ready") {
-            startGame(false);
+            await startGame(false);
             this.synced.selectedCells = [];
             this.synced.pulseCells = [];
             this.synced.floatingScores = [];
@@ -362,7 +364,7 @@ export class LetterFastGame extends preact.Component {
 
     onMouseDown = (e: MouseEvent) => {
         let pos = this.getRelativePos(e);
-        this.handleSelectionStart(pos);
+        void this.handleSelectionStart(pos);
     };
 
     handleSelectionMove = (pos: { x: number; y: number }) => {
@@ -525,7 +527,7 @@ export class LetterFastGame extends preact.Component {
         if (e.touches.length !== 1) return;
         let touch = e.touches[0];
         let pos = this.getRelativePos(touch);
-        this.handleSelectionStart(pos);
+        void this.handleSelectionStart(pos);
     };
 
     onTouchMove = (e: TouchEvent) => {
@@ -596,7 +598,7 @@ export class LetterFastGame extends preact.Component {
             <>
                 {!gameState.isMultiplayer && (
                     <>
-                        <button onClick={() => startGame()}>
+                        <button onClick={async () => await startGame()}>
                             {gameState.status === "ready" && "Start Game"}
                             {gameState.status === "playing" && "Restart"}
                             {gameState.status === "finished" && "Play Again"}
@@ -606,20 +608,31 @@ export class LetterFastGame extends preact.Component {
                                 End Now
                             </button>
                         )}
+                        {gameState.status === "ready" && (
+                            <button onClick={async () => {
+                                const defaults = { gridWidth: 4, gridHeight: 4, gameDuration: 90000 };
+                                await changeGridSize({ width: defaults.gridWidth, height: defaults.gridHeight });
+                                gameState.gameDuration = defaults.gameDuration;
+                                gameState.timeRemaining = defaults.gameDuration;
+                                saveConfig(defaults);
+                            }}>
+                                Default
+                            </button>
+                        )}
                         <button onClick={() => this.toggleFullscreen()}>
-                            {this.synced.isFullscreen && "Exit Fullscreen" || "Enter Fullscreen"}
+                            {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
                         </button>
                         <button onClick={() => {
                             pageURL.value = "config";
                         }}>
-                            Back to Menu
+                            Settings
                         </button>
                     </>
                 )}
                 {gameState.isMultiplayer && (
                     <>
                         <button onClick={() => this.toggleFullscreen()}>
-                            {this.synced.isFullscreen && "Exit Fullscreen" || "Enter Fullscreen"}
+                            {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
                         </button>
                         <button onClick={() => {
                             pageURL.value = "lobby";
@@ -868,9 +881,11 @@ export class LetterFastGame extends preact.Component {
                     )}
                     {!this.synced.isRotated && (
                         <>
-                            <div className={css.hbox(20).alignItems("center").colorhsl(0, 0, 100)}>
+                            <div className={css.hbox(20).alignItems("center").wrap.colorhsl(0, 0, 100)}>
                                 {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                {this.renderButtons()}
+                                <div className={css.hbox(12).wrap}>
+                                    {this.renderButtons()}
+                                </div>
                                 {this.renderPlayerScores()}
                             </div>
                             <div className={css.hbox(20).alignItems("start")}>
@@ -888,7 +903,7 @@ export class LetterFastGame extends preact.Component {
                         className={css.fixed.pos(0, 0).fillBoth
                             .hsla(0, 0, 0, 0.85).hbox(0).justifyContent("center")
                         }
-                        onClick={() => startGame()}
+                        onClick={async () => await startGame()}
                     >
                         <div
                             className={css.vbox(20).pad2(40)
@@ -906,10 +921,7 @@ export class LetterFastGame extends preact.Component {
                             <div className={css.fontSize(32)}>Game Over!</div>
                             <div className={css.vbox(8)}>
                                 <div className={css.fontSize(24)}>
-                                    Final Score: {gameState.score}
-                                </div>
-                                <div className={css.fontSize(18)}>
-                                    Words Found: {gameState.matchedWords.length}
+                                    {gameState.score} Score ({gameState.totalPossibleScore > 0 ? Math.round(gameState.score / gameState.totalPossibleScore * 100) : 0}%) | {gameState.matchedWords.length} Words ({gameState.totalPossibleWords > 0 ? Math.round(gameState.matchedWords.length / gameState.totalPossibleWords * 100) : 0}%)
                                 </div>
                             </div>
                             {gameState.matchedWords.length > 0 && (
@@ -925,7 +937,7 @@ export class LetterFastGame extends preact.Component {
                                     ))}
                                 </div>
                             )}
-                            <button onClick={() => startGame()}>
+                            <button onClick={async () => await startGame()}>
                                 Play Again
                             </button>
                             {gameHistory.length > 0 && (

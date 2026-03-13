@@ -1,4 +1,5 @@
-import { GridCell, generateGameGrid, getWordSet, calculateWordScoreForGrid, isAdjacent, GAME_DURATION } from "./GameState";
+import { GridCell, getWordSet, calculateWordScoreForGrid, isAdjacent, GAME_DURATION } from "./GameState";
+import { generateGameGrid } from "./GridGenerator";
 import { AllHandlers, ClientHandlers } from "./multiplayerFunctionHandlers";
 import { FunctionCallerInterface } from "./rpc/FunctionCaller";
 
@@ -19,6 +20,8 @@ interface Game {
     gridHeight: number;
     createdTime: number;
     lastActivityTime: number;
+    totalPossibleWords: number;
+    totalPossibleScore: number;
 }
 
 const games = new Map<string, Game>();
@@ -35,16 +38,17 @@ function generateGameId(): string {
     return id;
 }
 
-export function createGame(playerCount: number, player: PlayerIdentifier): { gameId: string } {
+export async function createGame(playerCount: number, player: PlayerIdentifier): Promise<{ gameId: string }> {
     const gameId = generateGameId();
     const now = Date.now();
+    const gridMetadata = await generateGameGrid(now, 4, 4);
 
     const game: Game = {
         id: gameId,
         playerCount: 16,
         players: [player],
         status: "waiting",
-        grid: generateGameGrid(now, 4, 4),
+        grid: gridMetadata.grid,
         scores: new Map([[player, 0]]),
         words: new Map([[player, []]]),
         startTime: undefined,
@@ -54,6 +58,8 @@ export function createGame(playerCount: number, player: PlayerIdentifier): { gam
         gridHeight: 4,
         createdTime: now,
         lastActivityTime: now,
+        totalPossibleWords: gridMetadata.totalPossibleWords,
+        totalPossibleScore: gridMetadata.totalPossibleScore,
     };
 
     games.set(gameId, game);
@@ -61,15 +67,16 @@ export function createGame(playerCount: number, player: PlayerIdentifier): { gam
     return { gameId };
 }
 
-export function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number): void {
+export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number): Promise<void> {
     const now = Date.now();
+    const gridMetadata = await generateGameGrid(now, gridWidth, gridHeight);
 
     const game: Game = {
         id: gameId,
         playerCount,
         players: [player],
         status: "waiting",
-        grid: generateGameGrid(now, gridWidth, gridHeight),
+        grid: gridMetadata.grid,
         scores: new Map([[player, 0]]),
         words: new Map([[player, []]]),
         startTime: undefined,
@@ -79,6 +86,8 @@ export function createGameWithId(gameId: string, playerCount: number, player: Pl
         gridHeight,
         createdTime: now,
         lastActivityTime: now,
+        totalPossibleWords: gridMetadata.totalPossibleWords,
+        totalPossibleScore: gridMetadata.totalPossibleScore,
     };
 
     games.set(gameId, game);
@@ -116,13 +125,16 @@ export function validateStartGame(gameId: string, player: PlayerIdentifier): voi
 }
 
 
-export function startGamePlaying(gameId: string): void {
+export async function startGamePlaying(gameId: string): Promise<void> {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
     }
     const now = Date.now();
-    game.grid = generateGameGrid(now, game.gridWidth, game.gridHeight);
+    const gridMetadata = await generateGameGrid(now, game.gridWidth, game.gridHeight);
+    game.grid = gridMetadata.grid;
+    game.totalPossibleWords = gridMetadata.totalPossibleWords;
+    game.totalPossibleScore = gridMetadata.totalPossibleScore;
     game.status = "playing";
     game.startTime = now;
     game.endTime = now + game.gameDuration;

@@ -312,8 +312,8 @@ export class GameLobby extends preact.Component {
                                             {isHostPlayer && (
                                                 <span className={css.opacity(0.7)}>(Host)</span>
                                             )}
-                                            <div className={css.fontSize(24).fontWeight("bold").marginLeft("auto")}>
-                                                {player.score}
+                                            <div className={css.fontSize(18).fontWeight("bold").marginLeft("auto")}>
+                                                {player.score} Score ({gameState.totalPossibleScore > 0 ? Math.round(player.score / gameState.totalPossibleScore * 100) : 0}%) | {words.length} Words ({gameState.totalPossibleWords > 0 ? Math.round(words.length / gameState.totalPossibleWords * 100) : 0}%)
                                             </div>
                                         </div>
 
@@ -322,7 +322,7 @@ export class GameLobby extends preact.Component {
                                                 <div className={css.fontSize(16).opacity(0.7)}>
                                                     Words ({words.length}):
                                                 </div>
-                                                <div className={css.hbox(8).wrap}>
+                                                <div className={css.hbox(8).wrap.overflowAuto.maxHeight(200)}>
                                                     {words.map((w, i) => (
                                                         <div key={i} className={css.fontSize(14)
                                                             .pad2(6, 4).borderRadius(4)
