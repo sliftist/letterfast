@@ -777,9 +777,6 @@ export class LetterFastGame extends preact.Component {
     renderMatchedWords(totalHeight: number) {
         return (
             <div className={css.vbox(12).colorhsl(0, 0, 100) + (this.synced.isRotated && css.fillWidth || css.width(250))}>
-                <div className={css.fontSize(20).fontWeight("bold")}>
-                    Matched Words ({gameState.matchedWords.length})
-                </div>
                 <div className={css.vbox(6).overflowAuto.fillWidth
                     .hsl(240, 30, 15).borderRadius(8).pad2(12)
                     + (this.synced.isRotated && css.height(MATCHED_WORDS_HEIGHT_PORTRAIT) || css.height(totalHeight))
