@@ -266,12 +266,41 @@ export class LetterFastGame extends preact.Component {
         this.synced.isOverCancelZone = false;
         if (DEBUG_MODE) this.synced.debugPositions = [];
         this.redraw();
+
+        if (!isNode()) {
+            window.removeEventListener("mousemove", this.onGlobalMouseMove);
+            window.removeEventListener("touchmove", this.onGlobalTouchMove, { passive: false } as any);
+            window.removeEventListener("mouseup", this.onGlobalMouseUp);
+            window.removeEventListener("touchend", this.onGlobalTouchEnd, { passive: false } as any);
+        }
     };
 
     onKeyDown = (e: KeyboardEvent) => {
         if (e.key === "Escape" && this.synced.drawing) {
             this.cancelSelection();
         }
+    };
+
+    onGlobalMouseMove = (e: MouseEvent) => {
+        let pos = this.getRelativePos(e);
+        this.handleSelectionMove(pos);
+    };
+
+    onGlobalTouchMove = (e: TouchEvent) => {
+        e.preventDefault();
+        if (e.touches.length !== 1) return;
+        let touch = e.touches[0];
+        let pos = this.getRelativePos(touch);
+        this.handleSelectionMove(pos);
+    };
+
+    onGlobalMouseUp = async () => {
+        await this.handleSelectionEnd();
+    };
+
+    onGlobalTouchEnd = async (e: TouchEvent) => {
+        e.preventDefault();
+        await this.handleSelectionEnd();
     };
 
     async componentDidMount() {
@@ -307,6 +336,10 @@ export class LetterFastGame extends preact.Component {
         if (!isNode()) {
             window.removeEventListener("resize", this.onResize);
             window.removeEventListener("keydown", this.onKeyDown);
+            window.removeEventListener("mousemove", this.onGlobalMouseMove);
+            window.removeEventListener("touchmove", this.onGlobalTouchMove, { passive: false } as any);
+            window.removeEventListener("mouseup", this.onGlobalMouseUp);
+            window.removeEventListener("touchend", this.onGlobalTouchEnd, { passive: false } as any);
             document.removeEventListener("touchstart", this.preventGlobalTouch);
             document.removeEventListener("touchmove", this.preventGlobalTouchMove);
             document.removeEventListener("fullscreenchange", this.onFullscreenChange);
@@ -374,6 +407,13 @@ export class LetterFastGame extends preact.Component {
             this.vibrate();
         }
         this.redraw();
+
+        if (!isNode()) {
+            window.addEventListener("mousemove", this.onGlobalMouseMove);
+            window.addEventListener("touchmove", this.onGlobalTouchMove, { passive: false });
+            window.addEventListener("mouseup", this.onGlobalMouseUp);
+            window.addEventListener("touchend", this.onGlobalTouchEnd, { passive: false });
+        }
     };
 
     onMouseDown = (e: MouseEvent) => {
@@ -527,6 +567,13 @@ export class LetterFastGame extends preact.Component {
         this.synced.drawing = false;
         this.synced.currentPos = undefined;
         this.synced.showCancelZone = false;
+
+        if (!isNode()) {
+            window.removeEventListener("mousemove", this.onGlobalMouseMove);
+            window.removeEventListener("touchmove", this.onGlobalTouchMove, { passive: false } as any);
+            window.removeEventListener("mouseup", this.onGlobalMouseUp);
+            window.removeEventListener("touchend", this.onGlobalTouchEnd, { passive: false } as any);
+        }
 
         try {
             if (this.synced.isOverCancelZone) {
