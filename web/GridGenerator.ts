@@ -226,6 +226,18 @@ function countVowels(grid: GridCell[][]): number {
     return count;
 }
 
+function countLetterOccurrences(grid: GridCell[][], letter: string): number {
+    let count = 0;
+    for (let row of grid) {
+        for (let cell of row) {
+            if (cell.letter === letter) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
 function ensureVowelLimits(grid: GridCell[][], random: () => number) {
     let totalCells = grid.length * grid[0].length;
     let minVowels = Math.ceil(totalCells * MIN_VOWEL_FRACTION);
@@ -233,25 +245,57 @@ function ensureVowelLimits(grid: GridCell[][], random: () => number) {
 
     let vowelCount = countVowels(grid);
 
+    let addVowelAttempts = 0;
     while (vowelCount < minVowels) {
         let row = Math.floor(random() * grid.length);
         let col = Math.floor(random() * grid[0].length);
         if (!VOWELS.includes(grid[row][col].letter)) {
-            let vowel = VOWELS[Math.floor(random() * VOWELS.length)];
-            grid[row][col].letter = vowel;
-            grid[row][col].points = LETTER_POINTS[vowel] || 1;
-            vowelCount++;
+            let vowel: string | undefined;
+            for (let attempt = 0; attempt < VOWELS.length * 3; attempt++) {
+                let candidateVowel = VOWELS[Math.floor(random() * VOWELS.length)];
+                if (countLetterOccurrences(grid, candidateVowel) < 2) {
+                    vowel = candidateVowel;
+                    break;
+                }
+            }
+            if (vowel) {
+                grid[row][col].letter = vowel;
+                grid[row][col].points = LETTER_POINTS[vowel] || 1;
+                vowelCount++;
+                addVowelAttempts = 0;
+            } else {
+                addVowelAttempts++;
+                if (addVowelAttempts > 1000) {
+                    throw new Error("Failed to add vowel while respecting letter limit constraint after 1000 attempts");
+                }
+            }
         }
     }
 
+    let removeVowelAttempts = 0;
     while (vowelCount > maxVowels) {
         let row = Math.floor(random() * grid.length);
         let col = Math.floor(random() * grid[0].length);
         if (VOWELS.includes(grid[row][col].letter)) {
-            let consonant = CONSONANTS[Math.floor(random() * CONSONANTS.length)];
-            grid[row][col].letter = consonant;
-            grid[row][col].points = LETTER_POINTS[consonant] || 1;
-            vowelCount--;
+            let consonant: string | undefined;
+            for (let attempt = 0; attempt < CONSONANTS.length * 3; attempt++) {
+                let candidateConsonant = CONSONANTS[Math.floor(random() * CONSONANTS.length)];
+                if (countLetterOccurrences(grid, candidateConsonant) < 2) {
+                    consonant = candidateConsonant;
+                    break;
+                }
+            }
+            if (consonant) {
+                grid[row][col].letter = consonant;
+                grid[row][col].points = LETTER_POINTS[consonant] || 1;
+                vowelCount--;
+                removeVowelAttempts = 0;
+            } else {
+                removeVowelAttempts++;
+                if (removeVowelAttempts > 1000) {
+                    throw new Error("Failed to remove vowel while respecting letter limit constraint after 1000 attempts");
+                }
+            }
         }
     }
 }
@@ -339,7 +383,15 @@ export async function generateGameGrid(seed: number, width: number, height: numb
     for (let row = 0; row < height; row++) {
         let rowCells: GridCell[] = [];
         for (let col = 0; col < width; col++) {
-            let letter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
+            let letter: string;
+            let attempts = 0;
+            do {
+                letter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
+                attempts++;
+                if (attempts > 1000) {
+                    throw new Error("Failed to generate grid with letter limit constraint after 1000 attempts");
+                }
+            } while (countLetterOccurrences(grid, letter) + rowCells.filter(c => c.letter === letter).length >= 2);
             rowCells.push({
                 letter,
                 points: LETTER_POINTS[letter] || 1,
@@ -388,7 +440,21 @@ export async function generateGameGrid(seed: number, width: number, height: numb
 
             let oldLetter = grid[leastUsefulCell.row][leastUsefulCell.col].letter;
             console.log(`Replacing ${oldLetter} (${leastUsefulCell.contribution} words)`);
-            let newLetter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
+            let newLetter: string | undefined;
+            for (let attempt = 0; attempt < 100; attempt++) {
+                let candidate = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
+                let currentCount = countLetterOccurrences(grid, candidate);
+                if (candidate === oldLetter) {
+                    currentCount--;
+                }
+                if (currentCount < 2) {
+                    newLetter = candidate;
+                    break;
+                }
+            }
+            if (!newLetter) {
+                break;
+            }
             grid[leastUsefulCell.row][leastUsefulCell.col].letter = newLetter;
             grid[leastUsefulCell.row][leastUsefulCell.col].points = LETTER_POINTS[newLetter] || 1;
 
