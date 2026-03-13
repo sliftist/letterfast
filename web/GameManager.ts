@@ -1,15 +1,8 @@
 import { GridCell, generateGameGrid, getWordSet, calculateWordScoreForGrid, isAdjacent, GAME_DURATION } from "./GameState";
-import { AllHandlers } from "./multiplayerFunctionHandlers";
+import { AllHandlers, ClientHandlers } from "./multiplayerFunctionHandlers";
 import { FunctionCallerInterface } from "./rpc/FunctionCaller";
 
 export type PlayerIdentifier = AllHandlers;
-
-export interface ClientHandlers {
-    onPlayerUpdate(players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void>;
-    onGameStart(grid: GridCell[][], startTime: number): Promise<void>;
-    onGameEnd(players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void>;
-}
-
 
 interface Game {
     id: string;
@@ -21,6 +14,11 @@ interface Game {
     words: Map<PlayerIdentifier, { word: string; points: number; cells: { row: number; col: number }[] }[]>;
     startTime?: number;
     endTime?: number;
+    gameDuration: number;
+    gridWidth: number;
+    gridHeight: number;
+    createdTime: number;
+    lastActivityTime: number;
 }
 
 const games = new Map<string, Game>();
@@ -38,22 +36,24 @@ function generateGameId(): string {
 }
 
 export function createGame(playerCount: number, player: PlayerIdentifier): { gameId: string } {
-    if (playerCount < 2 || playerCount > 16) {
-        throw new Error(`Player count must be between 2 and 16, was ${playerCount}`);
-    }
-
     const gameId = generateGameId();
+    const now = Date.now();
 
     const game: Game = {
         id: gameId,
-        playerCount,
+        playerCount: 16,
         players: [player],
         status: "waiting",
-        grid: generateGameGrid(Date.now(), 4, 4),
+        grid: generateGameGrid(now, 4, 4),
         scores: new Map([[player, 0]]),
         words: new Map([[player, []]]),
         startTime: undefined,
-        endTime: undefined
+        endTime: undefined,
+        gameDuration: 90000,
+        gridWidth: 4,
+        gridHeight: 4,
+        createdTime: now,
+        lastActivityTime: now,
     };
 
     games.set(gameId, game);
@@ -61,13 +61,33 @@ export function createGame(playerCount: number, player: PlayerIdentifier): { gam
     return { gameId };
 }
 
+export function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number): void {
+    const now = Date.now();
+
+    const game: Game = {
+        id: gameId,
+        playerCount,
+        players: [player],
+        status: "waiting",
+        grid: generateGameGrid(now, gridWidth, gridHeight),
+        scores: new Map([[player, 0]]),
+        words: new Map([[player, []]]),
+        startTime: undefined,
+        endTime: undefined,
+        gameDuration,
+        gridWidth,
+        gridHeight,
+        createdTime: now,
+        lastActivityTime: now,
+    };
+
+    games.set(gameId, game);
+}
+
 export function joinGame(gameId: string, player: PlayerIdentifier): void {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
-    }
-    if (game.status !== "waiting") {
-        throw new Error(`Game ${gameId} has already started`);
     }
     if (game.players.length >= game.playerCount) {
         throw new Error(`Game ${gameId} is full`);
@@ -87,8 +107,8 @@ export function validateStartGame(gameId: string, player: PlayerIdentifier): voi
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
     }
-    if (game.status !== "waiting") {
-        throw new Error(`Game ${gameId} has already started`);
+    if (game.status === "playing") {
+        throw new Error(`Game ${gameId} is currently playing`);
     }
     if (game.players[0] !== player) {
         throw new Error(`Only the first player can start the game`);
@@ -101,9 +121,17 @@ export function startGamePlaying(gameId: string): void {
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
     }
+    const now = Date.now();
+    game.grid = generateGameGrid(now, game.gridWidth, game.gridHeight);
     game.status = "playing";
-    game.startTime = Date.now();
-    game.endTime = Date.now() + GAME_DURATION;
+    game.startTime = now;
+    game.endTime = now + game.gameDuration;
+    game.lastActivityTime = now;
+
+    for (const player of game.players) {
+        game.scores.set(player, 0);
+        game.words.set(player, []);
+    }
 }
 
 export function endGame(gameId: string): void {
@@ -197,10 +225,6 @@ export function removePlayerFromGame(gameId: string, player: PlayerIdentifier): 
 
     game.scores.delete(player);
     game.words.delete(player);
-
-    if (game.players.length === 0) {
-        games.delete(gameId);
-    }
 }
 
 export function broadcastToGame(gameId: string, callback: (client: ClientHandlers, playerIndex: number) => void): void {
@@ -212,3 +236,76 @@ export function broadcastToGame(gameId: string, callback: (client: ClientHandler
     }
 }
 
+export function updateGameSettings(config: {
+    gameId: string;
+    player: PlayerIdentifier;
+    gridWidth?: number;
+    gridHeight?: number;
+    gameDuration?: number;
+}): void {
+    const game = games.get(config.gameId);
+    if (!game) {
+        throw new Error(`Game ${config.gameId} not found`);
+    }
+    if (game.status === "playing") {
+        throw new Error(`Cannot update settings while game is playing`);
+    }
+    if (game.players[0] !== config.player) {
+        throw new Error(`Only the host can update game settings`);
+    }
+
+    if (config.gridWidth !== undefined) {
+        if (config.gridWidth < 2 || config.gridWidth > 10) {
+            throw new Error(`Grid width must be between 2 and 10, was ${config.gridWidth}`);
+        }
+        game.gridWidth = config.gridWidth;
+    }
+
+    if (config.gridHeight !== undefined) {
+        if (config.gridHeight < 2 || config.gridHeight > 10) {
+            throw new Error(`Grid height must be between 2 and 10, was ${config.gridHeight}`);
+        }
+        game.gridHeight = config.gridHeight;
+    }
+
+    if (config.gameDuration !== undefined) {
+        if (config.gameDuration < 10000 || config.gameDuration > 3600000) {
+            throw new Error(`Game duration must be between 10000 and 3600000 ms, was ${config.gameDuration}`);
+        }
+        game.gameDuration = config.gameDuration;
+    }
+}
+
+export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number } {
+    const game = games.get(gameId);
+    if (!game) {
+        throw new Error(`Game ${gameId} not found`);
+    }
+    return {
+        gridWidth: game.gridWidth,
+        gridHeight: game.gridHeight,
+        gameDuration: game.gameDuration,
+    };
+}
+
+export function cleanupIdleGames(): void {
+    const now = Date.now();
+    const thirtyMinutes = 30 * 60 * 1000;
+    const oneWeek = 7 * 24 * 60 * 60 * 1000;
+
+    for (const [gameId, game] of games.entries()) {
+        if (game.players.length === 0) {
+            if (now - game.createdTime > thirtyMinutes) {
+                games.delete(gameId);
+            }
+        } else {
+            if (now - game.lastActivityTime > oneWeek) {
+                games.delete(gameId);
+            }
+        }
+    }
+}
+
+export function startCleanupInterval(): void {
+    setInterval(cleanupIdleGames, 5 * 60 * 1000);
+}

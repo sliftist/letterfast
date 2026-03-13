@@ -1,10 +1,20 @@
 import * as preact from "preact";
 import { observer } from "sliftutils/render-utils/observer";
 import { css } from "typesafecss";
-import { multiplayerState } from "./GameState";
-import { pageURL } from "./Page";
+import { gameState, formatTime } from "./GameState";
+import { pageURL, joinGameIdURL } from "./Page";
 import { getRPCClient } from "./rpcClient";
 import { observable } from "mobx";
+import { sort } from "socket-function/src/misc";
+import { getSavedConfigOrDefaults } from "./GameConfig";
+
+function saveConfig(config: { gridWidth: number; gridHeight: number; gameDuration: number }): void {
+    try {
+        localStorage.setItem("letterfast_game_config", JSON.stringify(config));
+    } catch (error) {
+        console.error("Failed to save config:", error);
+    }
+}
 
 @observer
 export class GameLobby extends preact.Component {
@@ -12,31 +22,68 @@ export class GameLobby extends preact.Component {
         copied: false,
     });
 
-    componentDidMount() {
-        if (!multiplayerState.gameId) {
+    saveCurrentConfig = () => {
+        saveConfig({
+            gridWidth: gameState.gridWidth,
+            gridHeight: gameState.gridHeight,
+            gameDuration: gameState.gameDuration,
+        });
+    };
+
+    async componentDidMount() {
+        if (!gameState.gameId) {
             pageURL.value = "";
+            return;
+        }
+
+        try {
+            const rpc = getRPCClient();
+            const settings = await rpc.getGameSettings(gameState.gameId);
+            gameState.gridWidth = settings.gridWidth;
+            gameState.gridHeight = settings.gridHeight;
+            gameState.gameDuration = settings.gameDuration;
+        } catch (error) {
+            console.error("Failed to fetch game settings:", error);
         }
     }
 
     onStartGame = async () => {
-        if (!multiplayerState.gameId) return;
+        if (!gameState.gameId) return;
         const rpc = getRPCClient();
-        await rpc.startGame(multiplayerState.gameId);
+        await rpc.startGame(gameState.gameId);
     };
 
     onCopyShareLink = async () => {
-        if (!multiplayerState.gameId) return;
-        const url = new URL(window.location.href);
-        url.searchParams.set("join", multiplayerState.gameId);
-        await navigator.clipboard.writeText(url.toString());
+        if (!gameState.gameId) return;
+        await navigator.clipboard.writeText(window.location.href);
         this.synced.copied = true;
         setTimeout(() => {
             this.synced.copied = false;
         }, 2000);
     };
 
+    onBackToConfig = () => {
+        joinGameIdURL.value = "";
+        gameState.gameId = undefined;
+        gameState.isMultiplayer = false;
+        gameState.myPlayerIndex = undefined;
+        gameState.players = [];
+        gameState.allWords = {};
+        pageURL.value = "";
+    };
+
+    onUpdateSettings = async () => {
+        if (!gameState.gameId) return;
+        try {
+            const rpc = getRPCClient();
+            await rpc.updateGameSettings(gameState.gameId, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration);
+        } catch (error) {
+            console.error("Failed to update settings:", error);
+        }
+    };
+
     render() {
-        const { gameId, myPlayerIndex, players, status } = multiplayerState;
+        const { gameId, myPlayerIndex, players, status, allWords } = gameState;
 
         if (!gameId) {
             return <div className={css.pad2(20)}>No game ID</div>;
@@ -47,7 +94,6 @@ export class GameLobby extends preact.Component {
 
         return (
             <div className={css.fillBoth.vbox(20)
-                .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
                 .pad2(40)
                 .colorhsl(0, 0, 100)
             }>
@@ -72,7 +118,34 @@ export class GameLobby extends preact.Component {
                     </div>
                 </div>
 
-                {status === "waiting" && (
+                {status === "playing" && (
+                    <div className={css.vbox(20)}>
+                        <div className={css.fontSize(28).fontWeight("bold").textAlign("center").colorhsl(120, 60, 60)}>
+                            Game is Active!
+                        </div>
+                        <div className={css.vbox(12).pad2(20).borderRadius(12).hsl(240, 30, 20)}>
+                            <div className={css.fontSize(20)}>
+                                Time Remaining: <span className={css.fontWeight("bold").colorhsl(120, 60, 60)}>{formatTime(gameState.timeRemaining)}</span>
+                            </div>
+                            <div className={css.fontSize(20)}>
+                                Players: <span className={css.fontWeight("bold")}>{playerCount}</span>
+                            </div>
+                            <div className={css.fontSize(20)}>
+                                Grid Size: <span className={css.fontWeight("bold")}>{gameState.gridWidth}x{gameState.gridHeight}</span>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => {
+                                pageURL.value = "game";
+                            }}
+                            className={css.fontSize(24).pad2(20, 16).hsl(120, 50, 40) + ""}
+                        >
+                            Join Game
+                        </button>
+                    </div>
+                )}
+
+                {(
                     <div className={css.vbox(16)}>
                         <div className={css.fontSize(24).fontWeight("bold")}>
                             Players ({playerCount})
@@ -97,28 +170,174 @@ export class GameLobby extends preact.Component {
                         </div>
 
                         {isHost && (
-                            <button
-                                onClick={this.onStartGame}
-                                className={css.fontSize(20).pad2(16, 12) + ""}
-                            >
-                                Start Game
-                            </button>
+                            <div className={css.vbox(12)}>
+                                <div className={css.fontSize(20).fontWeight("bold")}>
+                                    Game Settings
+                                </div>
+                                <div className={css.vbox(8)}>
+                                    <div className={css.hbox(12).alignItems("center")}>
+                                        <div className={css.fontSize(16)}>Grid Size:</div>
+                                        <input
+                                            type="number"
+                                            min="2"
+                                            max="10"
+                                            value={gameState.gridWidth}
+                                            disabled={status === "playing"}
+                                            onInput={(e) => {
+                                                const value = parseInt(e.currentTarget.value, 10);
+                                                if (!isNaN(value) && value >= 2 && value <= 10) {
+                                                    gameState.gridWidth = value;
+                                                    this.saveCurrentConfig();
+                                                }
+                                            }}
+                                            onBlur={() => {
+                                                void this.onUpdateSettings();
+                                            }}
+                                            className={css.fontSize(16).pad2(8).width(60) + ""}
+                                        />
+                                        <div className={css.fontSize(16)}>x</div>
+                                        <input
+                                            type="number"
+                                            min="2"
+                                            max="10"
+                                            value={gameState.gridHeight}
+                                            disabled={status === "playing"}
+                                            onInput={(e) => {
+                                                const value = parseInt(e.currentTarget.value, 10);
+                                                if (!isNaN(value) && value >= 2 && value <= 10) {
+                                                    gameState.gridHeight = value;
+                                                    this.saveCurrentConfig();
+                                                }
+                                            }}
+                                            onBlur={() => {
+                                                void this.onUpdateSettings();
+                                            }}
+                                            className={css.fontSize(16).pad2(8).width(60) + ""}
+                                        />
+                                    </div>
+                                    <div className={css.hbox(12).alignItems("center")}>
+                                        <div className={css.fontSize(16)}>Duration (seconds):</div>
+                                        <input
+                                            type="number"
+                                            min="10"
+                                            max="3600"
+                                            value={Math.round(gameState.gameDuration / 1000)}
+                                            disabled={status === "playing"}
+                                            onInput={(e) => {
+                                                const value = parseInt(e.currentTarget.value, 10);
+                                                if (!isNaN(value) && value >= 10 && value <= 3600) {
+                                                    gameState.gameDuration = value * 1000;
+                                                    this.saveCurrentConfig();
+                                                }
+                                            }}
+                                            onBlur={() => {
+                                                void this.onUpdateSettings();
+                                            }}
+                                            className={css.fontSize(16).pad2(8).width(80) + ""}
+                                        />
+                                    </div>
+                                </div>
+                                {status !== "playing" && (
+                                    <button
+                                        onClick={this.onStartGame}
+                                        className={css.fontSize(20).pad2(16, 12) + ""}
+                                    >
+                                        {status === "finished" && "Start New Game"}
+                                        {status === "waiting" && "Start Game"}
+                                    </button>
+                                )}
+                            </div>
                         )}
 
                         {!isHost && (
-                            <div className={css.fontSize(18).opacity(0.7).textAlign("center")}>
-                                Waiting for host to start the game...
+                            <div className={css.vbox(12)}>
+                                <div className={css.fontSize(20).fontWeight("bold")}>
+                                    Game Settings
+                                </div>
+                                <div className={css.vbox(8).fontSize(16)}>
+                                    <div>Grid Size: {gameState.gridWidth}x{gameState.gridHeight}</div>
+                                    <div>Duration: {Math.round(gameState.gameDuration / 1000)} seconds</div>
+                                </div>
+                                <div className={css.fontSize(18).opacity(0.7).textAlign("center")}>
+                                    {status === "finished" && "Waiting for host to start a new game..."}
+                                    {status === "waiting" && "Waiting for host to start the game..."}
+                                </div>
                             </div>
                         )}
 
                         <button
-                            onClick={() => {
-                                pageURL.value = "";
-                            }}
+                            onClick={this.onBackToConfig}
                             className={css.fontSize(18).pad2(12, 8) + ""}
                         >
-                            Leave Game
+                            Back to Configuration
                         </button>
+                    </div>
+                )}
+
+                {status === "finished" && (
+                    <div className={css.vbox(20)}>
+                        <div className={css.fontSize(32).fontWeight("bold").textAlign("center")}>
+                            Game Over!
+                        </div>
+
+                        <div className={css.vbox(16)}>
+                            <div className={css.fontSize(24).fontWeight("bold")}>
+                                Final Scores
+                            </div>
+                            {sort(players.slice(), p => -p.score).map((player, index) => {
+                                const playerIndex = players.findIndex(p => p.id === player.id);
+                                const isMe = playerIndex === myPlayerIndex;
+                                const words = allWords[player.id] || [];
+                                const isHostPlayer = playerIndex === 0;
+
+                                return (
+                                    <div
+                                        key={player.id}
+                                        className={css.vbox(12).pad2(16).borderRadius(8)
+                                            + (isHostPlayer
+                                                ? css.hsl(45, 50, 25)
+                                                : isMe
+                                                    ? css.hsl(240, 50, 25)
+                                                    : css.hsl(240, 30, 20)
+                                            )
+                                        }
+                                    >
+                                        <div className={css.hbox(12).alignItems("center")}>
+                                            <div className={css.fontSize(20).fontWeight("bold")}>
+                                                #{index + 1} Player {playerIndex + 1}
+                                            </div>
+                                            {isMe && (
+                                                <span className={css.opacity(0.7)}>(You)</span>
+                                            )}
+                                            {isHostPlayer && (
+                                                <span className={css.opacity(0.7)}>(Host)</span>
+                                            )}
+                                            <div className={css.fontSize(24).fontWeight("bold").marginLeft("auto")}>
+                                                {player.score}
+                                            </div>
+                                        </div>
+
+                                        {words.length > 0 && (
+                                            <div className={css.vbox(6)}>
+                                                <div className={css.fontSize(16).opacity(0.7)}>
+                                                    Words ({words.length}):
+                                                </div>
+                                                <div className={css.hbox(8).wrap}>
+                                                    {words.map((w, i) => (
+                                                        <div key={i} className={css.fontSize(14)
+                                                            .pad2(6, 4).borderRadius(4)
+                                                            .hsl(240, 40, 30)
+                                                        }>
+                                                            {w.word} ({w.points})
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 )}
             </div>

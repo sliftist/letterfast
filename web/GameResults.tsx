@@ -1,14 +1,14 @@
 import * as preact from "preact";
 import { observer } from "sliftutils/render-utils/observer";
 import { css } from "typesafecss";
-import { multiplayerState } from "./GameState";
+import { gameState } from "./GameState";
 import { sort } from "socket-function/src/misc";
 import { pageURL } from "./Page";
 
 @observer
 export class GameResults extends preact.Component {
     render() {
-        const { players, allWords, myPlayerIndex } = multiplayerState;
+        const { players, allWords, myPlayerIndex } = gameState;
         const myPlayerId = players[myPlayerIndex ?? -1]?.id;
 
         const sortedPlayers = sort(players, p => -p.score);
@@ -16,7 +16,6 @@ export class GameResults extends preact.Component {
 
         return (
             <div className={css.fillBoth.vbox(20)
-                .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
                 .pad2(40)
                 .colorhsl(0, 0, 100)
                 .overflowAuto

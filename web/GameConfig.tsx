@@ -1,41 +1,114 @@
 import preact from "preact";
 import { css } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
-import { pageURL } from "./Page";
-import { changeGridSize, getCurrentGridSize, multiplayerState } from "./GameState";
+import { pageURL, joinGameIdURL } from "./Page";
+import { changeGridSize, getCurrentGridSize, gameState } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
+
+const STORAGE_KEY = "letterfast_game_config";
+
+interface SavedConfig {
+    gridWidth: number;
+    gridHeight: number;
+    gameDuration: number;
+}
+
+function loadSavedConfig(): SavedConfig | undefined {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (!saved) return undefined;
+        const config = JSON.parse(saved) as SavedConfig;
+        if (config.gridWidth >= 2 && config.gridWidth <= 10 &&
+            config.gridHeight >= 2 && config.gridHeight <= 10 &&
+            config.gameDuration >= 10000 && config.gameDuration <= 3600000) {
+            return config;
+        }
+    } catch (error) {
+        console.error("Failed to load saved config:", error);
+    }
+    return undefined;
+}
+
+function saveConfig(config: SavedConfig): void {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    } catch (error) {
+        console.error("Failed to save config:", error);
+    }
+}
+
+export function getSavedConfigOrDefaults(): SavedConfig {
+    const saved = loadSavedConfig();
+    if (saved) return saved;
+    return {
+        gridWidth: 4,
+        gridHeight: 4,
+        gameDuration: 90000,
+    };
+}
 
 @observer
 export class GameConfig extends preact.Component {
     synced = observable({
         customWidth: 4,
         customHeight: 4,
-        isMultiplayer: false,
-        playerCount: 4,
+        gameDuration: 90000,
         gameIdToJoin: "",
         creating: false,
         joining: false,
         error: undefined as string | undefined,
     });
 
-    componentDidMount() {
-        let size = getCurrentGridSize();
-        this.synced.customWidth = size.width;
-        this.synced.customHeight = size.height;
+    saveCurrentConfig = () => {
+        saveConfig({
+            gridWidth: this.synced.customWidth,
+            gridHeight: this.synced.customHeight,
+            gameDuration: this.synced.gameDuration,
+        });
+    };
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const joinGameId = urlParams.get("join");
+    componentDidMount() {
+        const saved = loadSavedConfig();
+        if (saved) {
+            this.synced.customWidth = saved.gridWidth;
+            this.synced.customHeight = saved.gridHeight;
+            this.synced.gameDuration = saved.gameDuration;
+        } else {
+            let size = getCurrentGridSize();
+            this.synced.customWidth = size.width;
+            this.synced.customHeight = size.height;
+        }
+
+        const joinGameId = joinGameIdURL.value;
         if (joinGameId) {
             this.synced.gameIdToJoin = joinGameId.toUpperCase();
+            void this.onJoinGame();
         }
     }
+
+    startSinglePlayerGame = (config: { width: number; height: number }) => {
+        this.synced.customWidth = config.width;
+        this.synced.customHeight = config.height;
+        changeGridSize(config);
+        gameState.gameDuration = this.synced.gameDuration;
+        gameState.timeRemaining = this.synced.gameDuration;
+        pageURL.value = "game";
+    };
+
+    startMultiplayerGame = async (config: { width: number; height: number }) => {
+        this.synced.customWidth = config.width;
+        this.synced.customHeight = config.height;
+        await this.onCreateGame();
+    };
 
     onStartSinglePlayer = () => {
         changeGridSize({
             width: this.synced.customWidth,
             height: this.synced.customHeight,
         });
+        gameState.gameDuration = this.synced.gameDuration;
+        gameState.timeRemaining = this.synced.gameDuration;
         pageURL.value = "game";
     };
 
@@ -50,8 +123,18 @@ export class GameConfig extends preact.Component {
             });
 
             const rpc = getRPCClient();
-            const { gameId } = await rpc.createGame(this.synced.playerCount);
-            multiplayerState.gameId = gameId;
+            const { gameId } = await rpc.createGame(16);
+            gameState.gameId = gameId;
+            gameState.isMultiplayer = true;
+            gameState.gridWidth = this.synced.customWidth;
+            gameState.gridHeight = this.synced.customHeight;
+            gameState.gameDuration = this.synced.gameDuration;
+            gameState.timeRemaining = this.synced.gameDuration;
+
+            await rpc.updateGameSettings(gameId, this.synced.customWidth, this.synced.customHeight, this.synced.gameDuration);
+
+            joinGameIdURL.value = gameId;
+
             pageURL.value = "lobby";
         } catch (error) {
             this.synced.error = error instanceof Error ? error.message : String(error);
@@ -70,9 +153,11 @@ export class GameConfig extends preact.Component {
         this.synced.error = undefined;
 
         try {
+            const defaults = getSavedConfigOrDefaults();
             const rpc = getRPCClient();
-            await rpc.joinGame(this.synced.gameIdToJoin.toUpperCase());
-            multiplayerState.gameId = this.synced.gameIdToJoin.toUpperCase();
+            await rpc.joinGame(this.synced.gameIdToJoin.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
+            gameState.gameId = this.synced.gameIdToJoin.toUpperCase();
+            gameState.isMultiplayer = true;
             pageURL.value = "lobby";
         } catch (error) {
             this.synced.error = error instanceof Error ? error.message : String(error);
@@ -82,9 +167,14 @@ export class GameConfig extends preact.Component {
     };
 
     render() {
+        const multiplayerButtonStyle = css.fontSize(32).pad2(8).hsl(200, 60, 40)
+            .size(60, 60).display("flex").alignItems("center").justifyContent("center").flexShrink0 + "";
+        const multiplayerButtonStyleSmall = css.fontSize(28).pad2(6).hsl(200, 60, 40)
+            .size(50, 50).display("flex").alignItems("center").justifyContent("center").flexShrink0 + "";
+        const emojiStyle = css.relative.top(-6) + "";
+
         return (
             <div className={css.fillBoth.vbox(20)
-                .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
                 .pad2(40).colorhsl(0, 0, 100)
             }>
                 <div className={css.vbox(24).maxWidth(600).marginAuto}>
@@ -93,57 +183,54 @@ export class GameConfig extends preact.Component {
                             Quick Modes
                         </div>
                         <div className={css.vbox(12)}>
-                            <button
-                                className={css.fontSize(20).pad2(16) + ""}
-                                onClick={async () => {
-                                    this.synced.customWidth = 3;
-                                    this.synced.customHeight = 3;
-                                    changeGridSize({ width: 3, height: 3 });
-                                    if (this.synced.isMultiplayer) {
-                                        await this.onCreateGame();
-                                    } else {
-                                        pageURL.value = "game";
-                                    }
-                                }}
-                                disabled={this.synced.creating}
-                            >
-                                {this.synced.creating && "Creating..."}
-                                {!this.synced.creating && "3x3 Classic Mode"}
-                            </button>
-                            <button
-                                className={css.fontSize(20).pad2(16) + ""}
-                                onClick={async () => {
-                                    this.synced.customWidth = 4;
-                                    this.synced.customHeight = 4;
-                                    changeGridSize({ width: 4, height: 4 });
-                                    if (this.synced.isMultiplayer) {
-                                        await this.onCreateGame();
-                                    } else {
-                                        pageURL.value = "game";
-                                    }
-                                }}
-                                disabled={this.synced.creating}
-                            >
-                                {this.synced.creating && "Creating..."}
-                                {!this.synced.creating && "4x4 Standard Mode"}
-                            </button>
-                            <button
-                                className={css.fontSize(20).pad2(16) + ""}
-                                onClick={async () => {
-                                    this.synced.customWidth = 5;
-                                    this.synced.customHeight = 5;
-                                    changeGridSize({ width: 5, height: 5 });
-                                    if (this.synced.isMultiplayer) {
-                                        await this.onCreateGame();
-                                    } else {
-                                        pageURL.value = "game";
-                                    }
-                                }}
-                                disabled={this.synced.creating}
-                            >
-                                {this.synced.creating && "Creating..."}
-                                {!this.synced.creating && "5x5 Extended Mode"}
-                            </button>
+                            <div className={css.hbox(12)}>
+                                <button
+                                    className={css.fontSize(20).pad2(16) + ""}
+                                    onClick={() => this.startSinglePlayerGame({ width: 3, height: 3 })}
+                                >
+                                    3x3 Classic Mode
+                                </button>
+                                <button
+                                    className={multiplayerButtonStyle}
+                                    onClick={() => this.startMultiplayerGame({ width: 3, height: 3 })}
+                                    disabled={this.synced.creating}
+                                >
+                                    {this.synced.creating && "..."}
+                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
+                                </button>
+                            </div>
+                            <div className={css.hbox(12)}>
+                                <button
+                                    className={css.fontSize(20).pad2(16) + ""}
+                                    onClick={() => this.startSinglePlayerGame({ width: 4, height: 4 })}
+                                >
+                                    4x4 Standard Mode
+                                </button>
+                                <button
+                                    className={multiplayerButtonStyle}
+                                    onClick={() => this.startMultiplayerGame({ width: 4, height: 4 })}
+                                    disabled={this.synced.creating}
+                                >
+                                    {this.synced.creating && "..."}
+                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
+                                </button>
+                            </div>
+                            <div className={css.hbox(12)}>
+                                <button
+                                    className={css.fontSize(20).pad2(16) + ""}
+                                    onClick={() => this.startSinglePlayerGame({ width: 5, height: 5 })}
+                                >
+                                    5x5 Extended Mode
+                                </button>
+                                <button
+                                    className={multiplayerButtonStyle}
+                                    onClick={() => this.startMultiplayerGame({ width: 5, height: 5 })}
+                                    disabled={this.synced.creating}
+                                >
+                                    {this.synced.creating && "..."}
+                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -161,6 +248,7 @@ export class GameConfig extends preact.Component {
                                     let value = parseInt(e.currentTarget.value, 10);
                                     if (!isNaN(value)) {
                                         this.synced.customWidth = value;
+                                        this.saveCurrentConfig();
                                     }
                                 }}
                                 className={css.fontSize(20).pad2(12).width(80) + ""}
@@ -175,27 +263,58 @@ export class GameConfig extends preact.Component {
                                     let value = parseInt(e.currentTarget.value, 10);
                                     if (!isNaN(value)) {
                                         this.synced.customHeight = value;
+                                        this.saveCurrentConfig();
                                     }
                                 }}
                                 className={css.fontSize(20).pad2(12).width(80) + ""}
                             />
                             <button
                                 className={css.fontSize(18).pad2(12) + ""}
+                                onClick={() => {
+                                    if (this.synced.customWidth >= 2 && this.synced.customWidth <= 10
+                                        && this.synced.customHeight >= 2 && this.synced.customHeight <= 10) {
+                                        this.onStartSinglePlayer();
+                                    }
+                                }}
+                            >
+                                {`Start ${this.synced.customWidth}x${this.synced.customHeight} Game`}
+                            </button>
+                            <button
+                                className={multiplayerButtonStyleSmall}
                                 onClick={async () => {
                                     if (this.synced.customWidth >= 2 && this.synced.customWidth <= 10
                                         && this.synced.customHeight >= 2 && this.synced.customHeight <= 10) {
-                                        if (this.synced.isMultiplayer) {
-                                            await this.onCreateGame();
-                                        } else {
-                                            this.onStartSinglePlayer();
-                                        }
+                                        await this.onCreateGame();
                                     }
                                 }}
                                 disabled={this.synced.creating}
                             >
-                                {this.synced.creating && "Creating..."}
-                                {!this.synced.creating && `Start ${this.synced.customWidth}x${this.synced.customHeight} Game`}
+                                {this.synced.creating && "..."}
+                                {!this.synced.creating && <span className={emojiStyle}>👥</span>}
                             </button>
+                        </div>
+                    </div>
+
+                    <div className={css.vbox(16)}>
+                        <div className={css.fontSize(24).fontWeight("bold")}>
+                            Game Duration
+                        </div>
+                        <div className={css.hbox(12).alignItems("center")}>
+                            <input
+                                type="number"
+                                min="10"
+                                max="3600"
+                                value={Math.round(this.synced.gameDuration / 1000)}
+                                onInput={(e) => {
+                                    let value = parseInt(e.currentTarget.value, 10);
+                                    if (!isNaN(value) && value >= 10 && value <= 3600) {
+                                        this.synced.gameDuration = value * 1000;
+                                        this.saveCurrentConfig();
+                                    }
+                                }}
+                                className={css.fontSize(20).pad2(12).width(100) + ""}
+                            />
+                            <div className={css.fontSize(20)}>seconds (10-3600)</div>
                         </div>
                     </div>
 
@@ -223,35 +342,6 @@ export class GameConfig extends preact.Component {
                             </button>
                         </div>
                     </div>
-
-                    <div className={css.vbox(12)}>
-                        <label className={css.hbox(12).alignItems("center").fontSize(18)}>
-                            <input
-                                type="checkbox"
-                                checked={this.synced.isMultiplayer}
-                                onChange={(e) => {
-                                    this.synced.isMultiplayer = e.currentTarget.checked;
-                                }}
-                            />
-                            Multiplayer Mode
-                        </label>
-                    </div>
-
-                    {this.synced.isMultiplayer && (
-                        <div className={css.vbox(12)}>
-                            <div className={css.fontSize(20).fontWeight("bold")}>Number of Players</div>
-                            <input
-                                type="number"
-                                min="2"
-                                max="16"
-                                value={this.synced.playerCount}
-                                onInput={(e) => {
-                                    this.synced.playerCount = +e.currentTarget.value;
-                                }}
-                                className={css.fontSize(16).pad2(8).width(80) + ""}
-                            />
-                        </div>
-                    )}
 
                     {this.synced.error && (
                         <div className={css.colorhsl(0, 70, 60).fontSize(16).pad2(12).borderRadius(8).hsl(0, 30, 20)}>

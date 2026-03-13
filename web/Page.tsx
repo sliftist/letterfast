@@ -8,6 +8,7 @@ import { GameLobby } from "./GameLobby";
 import { GameResults } from "./GameResults";
 
 export const pageURL = new URLParam("page");
+export const joinGameIdURL = new URLParam("join", "");
 
 @observer
 export class Page extends preact.Component {
@@ -53,10 +54,6 @@ export class Page extends preact.Component {
                 content: <GameLobby />
             },
             {
-                key: "play",
-                content: <LetterFastGame multiplayer={true} />
-            },
-            {
                 key: "results",
                 content: <GameResults />
             },
@@ -65,7 +62,10 @@ export class Page extends preact.Component {
         let page = pages.find(p => p.key === pageURL.value) || pages[0];
 
         return (
-            <div className={css.size("100vw", "100vh")}>
+            <div className={css.size("100vw", "100vh")
+                .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
+                .overflowAuto
+            }>
                 {page.content}
             </div>
         );

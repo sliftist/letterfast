@@ -15,12 +15,25 @@ export interface GridCell {
     multiplier: 1 | 2 | 3;
 }
 
+export interface MultiplayerPlayer {
+    id: string;
+    score: number;
+}
+
 export interface GameState {
-    status: "ready" | "playing" | "finished";
+    status: "ready" | "playing" | "finished" | "waiting";
     grid: GridCell[][];
     timeRemaining: number;
     score: number;
     matchedWords: { word: string; points: number }[];
+    isMultiplayer: boolean;
+    gameId: string | undefined;
+    myPlayerIndex: number | undefined;
+    players: MultiplayerPlayer[];
+    allWords: Record<string, { word: string; points: number }[]>;
+    gameDuration: number;
+    gridWidth: number;
+    gridHeight: number;
 }
 
 export interface GameHistory {
@@ -42,30 +55,6 @@ export const LETTER_POINTS: { [key: string]: number } = {
 
 export const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIINNNNNNNSSSSSSRRRRRRHHHHHHDDDDLLLLCCCCUUUUMMMMPPPPFFFFGGGGBBBBVVWWYYKJXQZ";
 
-let GRID_WIDTH = 4;
-let GRID_HEIGHT = 4;
-
-function getStoredGridDimensions(): { width: number; height: number } {
-    if (isNode()) return { width: 2, height: 2 };
-    let stored = localStorage.getItem("letterfast-grid-dimensions");
-    if (!stored) return { width: 4, height: 4 };
-    let parsed = JSON.parse(stored);
-    if (!parsed || typeof parsed.width !== "number" || typeof parsed.height !== "number") {
-        return { width: 4, height: 4 };
-    }
-    if (parsed.width < 2 || parsed.width > 10 || parsed.height < 2 || parsed.height > 10) {
-        return { width: 4, height: 4 };
-    }
-    return { width: parsed.width, height: parsed.height };
-}
-
-function setStoredGridDimensions(config: { width: number; height: number }) {
-    localStorage.setItem("letterfast-grid-dimensions", JSON.stringify(config));
-}
-
-let storedDimensions = getStoredGridDimensions();
-GRID_WIDTH = storedDimensions.width;
-GRID_HEIGHT = storedDimensions.height;
 
 let wordSet: Set<string> | undefined;
 export function getWordSet() {
@@ -111,33 +100,45 @@ export function generateGameGrid(seed: number, width: number, height: number): G
 
 function generateGrid(): GridCell[][] {
     let seed = Date.now();
-    return generateGameGrid(seed, GRID_WIDTH, GRID_HEIGHT);
+    return generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
 }
 
 export const gameHistory: GameHistory[] = [];
 export const gameState = observable<GameState>({
     status: "ready",
-    grid: generateGrid(),
+    grid: [],
     timeRemaining: GAME_DURATION,
     score: 0,
     matchedWords: [],
+    isMultiplayer: false,
+    gameId: undefined,
+    myPlayerIndex: undefined,
+    players: [],
+    allWords: {},
+    gameDuration: GAME_DURATION,
+    gridWidth: 4,
+    gridHeight: 4,
 });
+gameState.grid = generateGrid();
 
 let timerInterval: number | undefined;
 
-export function startGame(regenerateGrid = true) {
+export function startGame(regenerateGrid = true, duration?: number) {
     gameState.status = "playing";
+    if (duration !== undefined) {
+        gameState.gameDuration = duration;
+    }
     if (regenerateGrid) {
         gameState.grid = generateGrid();
     }
-    gameState.timeRemaining = GAME_DURATION;
+    gameState.timeRemaining = gameState.gameDuration;
     gameState.score = 0;
     gameState.matchedWords = [];
     if (timerInterval) clearInterval(timerInterval);
     let startTime = Date.now();
     timerInterval = window.setInterval(() => {
         if (gameState.status !== "playing") return;
-        gameState.timeRemaining = Math.max(0, GAME_DURATION - (Date.now() - startTime));
+        gameState.timeRemaining = Math.max(0, gameState.gameDuration - (Date.now() - startTime));
         if (gameState.timeRemaining === 0) {
             endGame();
         }
@@ -152,7 +153,7 @@ export function endGame() {
         timestamp: Date.now(),
         score: gameState.score,
         wordsFound: gameState.matchedWords.length,
-        duration: GAME_DURATION - gameState.timeRemaining,
+        duration: gameState.gameDuration - gameState.timeRemaining,
     });
 }
 
@@ -163,20 +164,19 @@ export function changeGridSize(config: { width: number; height: number }) {
     if (config.height < 2 || config.height > 10) {
         throw new Error(`Grid height must be between 2 and 10, was ${config.height}`);
     }
-    GRID_WIDTH = config.width;
-    GRID_HEIGHT = config.height;
-    setStoredGridDimensions(config);
+    gameState.gridWidth = config.width;
+    gameState.gridHeight = config.height;
     gameState.grid = generateGrid();
     gameState.status = "ready";
     gameState.score = 0;
     gameState.matchedWords = [];
-    gameState.timeRemaining = GAME_DURATION;
+    gameState.timeRemaining = gameState.gameDuration;
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = undefined;
 }
 
 export function getCurrentGridSize(): { width: number; height: number } {
-    return { width: GRID_WIDTH, height: GRID_HEIGHT };
+    return { width: gameState.gridWidth, height: gameState.gridHeight };
 }
 
 export function calculateWordScore(cells: { row: number; col: number }[]): number {
@@ -240,18 +240,3 @@ export function cleanup() {
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = undefined;
 }
-
-export interface MultiplayerPlayer {
-    id: string;
-    score: number;
-}
-
-export const multiplayerState = observable({
-    gameId: undefined as string | undefined,
-    myPlayerIndex: undefined as number | undefined,
-    players: [] as MultiplayerPlayer[],
-    status: "waiting" as "waiting" | "playing" | "finished",
-    grid: undefined as GridCell[][] | undefined,
-    timeRemaining: 0,
-    allWords: {} as Record<string, { word: string; points: number }[]>
-});

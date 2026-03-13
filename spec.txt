@@ -1,32 +1,20 @@
 
-The button to go the the config page is gone? Fix this, users are trapped on the play page with no way to change settings or enter a multiplayer game
-
-Please make some fixes in the project. First of all, the ShareLink  seems to pre-populate the Join Game input, but it doesn't actually join the game. I don't care about popling the input, just join the actual game.
-
-The matched words seems to be broken at least in multiplayer. It shows score of other player, but not matched words.
-
-Make the UI better. We say other players in big bold letters and then have the list of players. You don't need to say other players just by saying that it's player two. They can tell it's other player.
-
-When a multiplayer game finishes, go back to the lobby, showing the scores of each player, in score order, and their words, with the host highlighted
-    - And, it should be the lobby so the host can start the game again.   
-    - We might have this functionality somewhere else, but it's presently not showing up, so that other functionality should be removed/moved.
-    - Get rid of all of the auto start functionality. We should just always require the host to click start.
-    - Get rid of the ability to change the max player count in a game. Keep it as a variable server side, but server side when we create a game, always set it to 16.
-    - Do add for the ability for the host to change the game size in the lobby screen.
-
-Allow configuring the game duration as well (both in single player and multiplayer)
-    - Between 10 seconds and 1 hour.
-    
 
 
-Fixes
+
+When dragging, first we should of course check if the mouse is in the collision area for a tile, Then we should check the line from the last selected tile to the current position, and if that intersects a tile, we should. Should select that tile, selecting the one closest to the last selected tile. That way, if they select really quickly and they jump from one tile all the way across the board, we can select the intermediate tiles, as it's very possible for them to move their mouse this fast, moving across the entire board within one frame. 
+
+
+
+
+
+
 
 Review security
 
 Ask the AI to review security
 
-Clean up games after they are idle for long enough (time since last start)
-    - A week?
+use an always-up wrapper
 
 - Have the server host the files
     - And build them?
@@ -38,20 +26,28 @@ Make custom domain for it with cloudflare
 
 
 
-- Online play
-    - Synchronized play (playing at the same time)
-        - Countdown timer
-    - Show scores
-    - At the end show end screen
+
+Better game lobby display
+    - When we finish, we show too much information. We show the list of players, but we also show the final scores. Those are redundant. We should be using the same UI for it and just have the score, the ranking, and the words only show if we have that information. 
+
+In single player auto start if they don't do anything after 5 seconds
+
+Do some testing with a lot of words found
 
 
-- Mobile UI
-    - if the ui is small enough, hide the word list
-        - also add an option to manually hide it, which we remember in local storage
-    - tactile feedback
-    - Deploy as static site and test on phone
+
+Mobile support
+    ensure touch support works
+    tactile feedback
+    orientation support (always orient in the same way)
+
+Fix the single player game over screen on mobile
+    - Make a universal game over screen that can show the score anywhere we need it (multiplayer, etc), and have this show as a page instead of some kind of weird pop-up. 
 
 - Smaller dictionary
+    - Allow picking between different dictionaries
+        - Zip and unzip them?
+    - Download the dictionaries on load, with progress.
 
 - Better UI
 

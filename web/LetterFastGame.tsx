@@ -4,10 +4,11 @@ import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { sort } from "socket-function/src/misc";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { pageURL } from "./Page";
+import { pageURL, joinGameIdURL } from "./Page";
 import {
     CELL_SIZE,
     CELL_GAP,
+    HIT_SIZE,
     GAME_DURATION,
     gameState,
     gameHistory,
@@ -21,10 +22,21 @@ import {
     formatTime,
     getWordSet,
     cleanup,
-    multiplayerState,
     GridCell,
 } from "./GameState";
 import { getRPCClient } from "./rpcClient";
+
+const VIEWPORT_MARGIN_BASE = 20;
+const VIEWPORT_MARGIN_REFERENCE_SIZE = 1000;
+const PORTRAIT_ROTATION_THRESHOLD = 0.75;
+const OUTER_PADDING = 20;
+const MATCHED_WORDS_WIDTH = 250;
+const GRID_TO_WORDS_GAP = 20;
+const HEADER_GAP = 20;
+const HEADER_HEIGHT_ESTIMATE = 50;
+const CURRENT_WORD_HEIGHT = 32;
+const BELOW_GRID_GAP = 12;
+
 function redrawCanvas(
     canvas: HTMLCanvasElement,
     selectedCells: { row: number; col: number }[],
@@ -57,12 +69,8 @@ interface FloatingScore {
     timestamp: number;
 }
 
-interface LetterFastGameProps {
-    multiplayer?: boolean;
-}
-
 @observer
-export class LetterFastGame extends preact.Component<LetterFastGameProps> {
+export class LetterFastGame extends preact.Component {
     canvas: HTMLCanvasElement | undefined;
     wrapper: HTMLDivElement | undefined;
     floatingScoreId = 0;
@@ -73,17 +81,104 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
         selectedCells: [] as { row: number; col: number }[],
         pulseCells: [] as { row: number; col: number }[],
         floatingScores: [] as FloatingScore[],
+        scale: 1,
+        isRotated: false,
     });
+
+    updateScaling = () => {
+        if (isNode()) return;
+
+        const aspectRatio = window.innerWidth / window.innerHeight;
+        this.synced.isRotated = aspectRatio < PORTRAIT_ROTATION_THRESHOLD;
+
+        const minViewportSize = Math.min(window.innerWidth, window.innerHeight);
+        const viewportMargin = (minViewportSize / VIEWPORT_MARGIN_REFERENCE_SIZE) * VIEWPORT_MARGIN_BASE;
+
+        const gridSize = getCurrentGridSize();
+        const gridNaturalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
+        const gridNaturalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
+
+        const contentNaturalWidth = gridNaturalWidth + GRID_TO_WORDS_GAP + MATCHED_WORDS_WIDTH;
+        const contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
+
+        let availableWidth = window.innerWidth - (viewportMargin * 2);
+        let availableHeight = window.innerHeight - (viewportMargin * 2);
+
+        if (this.synced.isRotated) {
+            const temp = availableWidth;
+            availableWidth = availableHeight;
+            availableHeight = temp;
+        }
+
+        const scaleWidth = availableWidth / contentNaturalWidth;
+        const scaleHeight = availableHeight / contentNaturalHeight;
+
+        const scaleFactor = Math.min(scaleWidth, scaleHeight);
+
+        this.synced.scale = Math.max(0.3, scaleFactor);
+    };
+
+    onResize = () => {
+        this.updateScaling();
+    };
+
+    async componentDidMount() {
+        this.updateScaling();
+
+        if (!isNode()) {
+            window.addEventListener("resize", this.onResize);
+        }
+
+        const joinGameId = joinGameIdURL.value;
+        if (joinGameId && !gameState.gameId) {
+            try {
+                const { getSavedConfigOrDefaults } = await import("./GameConfig");
+                const defaults = getSavedConfigOrDefaults();
+                const rpc = getRPCClient();
+                await rpc.joinGame(joinGameId.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
+                gameState.gameId = joinGameId.toUpperCase();
+                gameState.isMultiplayer = true;
+                pageURL.value = "lobby";
+            } catch (error) {
+                console.error("Failed to join game:", error);
+            }
+        }
+    }
 
     componentWillUnmount() {
         cleanup();
+        if (!isNode()) {
+            window.removeEventListener("resize", this.onResize);
+        }
     }
 
-    getRelativePos(e: MouseEvent): { x: number; y: number } {
+    getRelativePos(e: MouseEvent | Touch): { x: number; y: number } {
         let wrapper = this.wrapper;
         if (!wrapper) throw new Error(`Expected wrapper to be mounted`);
         let rect = wrapper.getBoundingClientRect();
-        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+        if (!this.synced.isRotated) {
+            let x = (e.clientX - rect.left) / this.synced.scale;
+            let y = (e.clientY - rect.top) / this.synced.scale;
+            return { x, y };
+        }
+
+        let centerX = rect.left + rect.width / 2;
+        let centerY = rect.top + rect.height / 2;
+        let relX = (e.clientX - centerX) / this.synced.scale;
+        let relY = (e.clientY - centerY) / this.synced.scale;
+
+        let unrotatedX = relY;
+        let unrotatedY = -relX;
+
+        const gridSize = getCurrentGridSize();
+        const totalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
+        const totalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
+
+        let x = unrotatedX + totalWidth / 2;
+        let y = unrotatedY + totalHeight / 2;
+
+        return { x, y };
     }
 
     redraw() {
@@ -133,28 +228,22 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
     };
 
     onMouseUp = async () => {
-        const isMultiplayer = this.props.multiplayer;
-        const currentState = isMultiplayer ? multiplayerState : gameState;
-        const currentGrid = isMultiplayer ? multiplayerState.grid : gameState.grid;
-
         if (!this.synced.drawing) return;
-        if (!isMultiplayer && gameState.status !== "playing") return;
-        if (isMultiplayer && multiplayerState.status !== "playing") return;
-        if (!currentGrid) return;
+        if (gameState.status !== "playing") return;
 
         this.synced.drawing = false;
         this.synced.currentPos = undefined;
 
         let word = this.synced.selectedCells
-            .map(c => currentGrid[c.row][c.col].letter)
+            .map(c => gameState.grid[c.row][c.col].letter)
             .join("")
             .toLowerCase();
 
         if (word.length > 1 && getWordSet().has(word)) {
-            if (isMultiplayer) {
-                if (!isNode() && multiplayerState.gameId) {
+            if (gameState.isMultiplayer) {
+                if (!isNode() && gameState.gameId) {
                     const rpc = getRPCClient();
-                    await rpc.submitWord(multiplayerState.gameId, word.toUpperCase(), this.synced.selectedCells);
+                    await rpc.submitWord(gameState.gameId, word.toUpperCase(), this.synced.selectedCells);
                 }
             } else {
                 let alreadyMatched = gameState.matchedWords.some(m => m.word === word.toUpperCase());
@@ -185,30 +274,107 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
         this.redraw();
     };
 
-    render() {
-        const isMultiplayer = this.props.multiplayer;
-        const currentState = isMultiplayer ? multiplayerState : gameState;
-        const currentGrid = isMultiplayer ? (multiplayerState.grid || gameState.grid) : gameState.grid;
-        const timeRemaining = isMultiplayer ? multiplayerState.timeRemaining : gameState.timeRemaining;
-        const currentScore = isMultiplayer
-            ? (multiplayerState.myPlayerIndex !== undefined ? multiplayerState.players[multiplayerState.myPlayerIndex]?.score || 0 : 0)
-            : gameState.score;
+    onTouchStart = (e: TouchEvent) => {
+        e.preventDefault();
+        if (e.touches.length !== 1) return;
+        let touch = e.touches[0];
+        if (gameState.status === "ready") {
+            startGame(false);
+            this.synced.selectedCells = [];
+            this.synced.pulseCells = [];
+            this.synced.floatingScores = [];
+        }
+        if (gameState.status !== "playing") return;
+        let pos = this.getRelativePos(touch);
+        this.synced.selectedCells = [];
+        this.synced.drawing = true;
+        this.synced.currentPos = pos;
+        let cell = getCellAt(pos);
+        if (cell) this.synced.selectedCells.push(cell);
+        this.redraw();
+    };
 
+    onTouchMove = (e: TouchEvent) => {
+        e.preventDefault();
+        if (!this.synced.drawing || gameState.status !== "playing") return;
+        if (e.touches.length !== 1) return;
+        let touch = e.touches[0];
+        let pos = this.getRelativePos(touch);
+        this.synced.currentPos = pos;
+        let cell = getCellAt(pos);
+        if (cell && !this.isCellSelected(cell.row, cell.col)) {
+            let cells = this.synced.selectedCells;
+            let last = cells[cells.length - 1];
+            if (!last || isAdjacent(last, cell)) {
+                this.synced.selectedCells.push(cell);
+            }
+        }
+        this.redraw();
+    };
+
+    onTouchEnd = async (e: TouchEvent) => {
+        e.preventDefault();
+        if (!this.synced.drawing) return;
+        if (gameState.status !== "playing") return;
+
+        this.synced.drawing = false;
+        this.synced.currentPos = undefined;
+
+        let word = this.synced.selectedCells
+            .map(c => gameState.grid[c.row][c.col].letter)
+            .join("")
+            .toLowerCase();
+
+        if (word.length > 1 && getWordSet().has(word)) {
+            if (gameState.isMultiplayer) {
+                if (!isNode() && gameState.gameId) {
+                    const rpc = getRPCClient();
+                    await rpc.submitWord(gameState.gameId, word.toUpperCase(), this.synced.selectedCells);
+                }
+            } else {
+                let alreadyMatched = gameState.matchedWords.some(m => m.word === word.toUpperCase());
+                if (!alreadyMatched) {
+                    let points = calculateWordScore(this.synced.selectedCells);
+                    gameState.score += points;
+                    gameState.matchedWords.push({ word: word.toUpperCase(), points });
+                    this.synced.pulseCells = this.synced.selectedCells.slice();
+                    setTimeout(() => {
+                        this.synced.pulseCells = [];
+                    }, 600);
+                    let scoreId = this.floatingScoreId++;
+                    this.synced.floatingScores.push({ id: scoreId, points, timestamp: Date.now() });
+                    setTimeout(() => {
+                        this.synced.floatingScores = this.synced.floatingScores.filter(s => s.id !== scoreId);
+                    }, 1000);
+                }
+            }
+        }
+        this.synced.selectedCells = [];
+        this.redraw();
+    };
+
+    onTouchCancel = () => {
+        this.synced.drawing = false;
+        this.synced.currentPos = undefined;
+        this.synced.selectedCells = [];
+        this.redraw();
+    };
+
+    render() {
         let gridSize = getCurrentGridSize();
         let totalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
         let totalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
         let currentWord = this.synced.selectedCells
-            .map(c => currentGrid[c.row][c.col].letter)
+            .map(c => gameState.grid[c.row][c.col].letter)
             .join(" ");
 
         this.redraw();
 
-        let timePercent = (timeRemaining / GAME_DURATION) * 100;
+        let timePercent = (gameState.timeRemaining / gameState.gameDuration) * 100;
 
         return (
             <div className={css.fillBoth.vbox(20)
-                .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
-                .pad2(20)
+                .pad2(20).justifyContent("center").alignItems("center")
             }>
                 <style>{`
                     @keyframes pulseOut {
@@ -235,185 +401,200 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
                         animation: floatUp 1000ms ease-out;
                     }
                 `}</style>
-                <div className={css.hbox(20).alignItems("center").colorhsl(0, 0, 100)}>
-                    <div className={css.vbox(4)}>
-                        <div className={css.fontSize(32).width(100).textAlign("center")}>
-                            {formatTime(timeRemaining)}
-                        </div>
-                        <div className={css.width(100).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
-                            <div
-                                className={css.absolute.pos(0, 0).height(4).hsl(0, 180, 50).borderRadius(2) + ""}
-                                style={{ width: `${timePercent}%`, transition: "width 0.1s linear" }}
-                            />
-                        </div>
-                    </div>
-                    <div className={css.fontSize(24).relative}>
-                        Score: {currentScore}
-                        {this.synced.floatingScores.map(fs => (
-                            <div
-                                key={fs.id}
-                                className={css.absolute.pos(-30, 30).fontSize(24).fontWeight("bold")
-                                    .colorhsl(120, 70, 60) + " floating-score"}
-                            >
-                                +{fs.points}
-                            </div>
-                        ))}
-                    </div>
-                    {!isMultiplayer && (
-                        <>
-                            <button onClick={() => startGame()}>
-                                {gameState.status === "ready" && "Start Game"}
-                                {gameState.status === "playing" && "Restart"}
-                                {gameState.status === "finished" && "Play Again"}
-                            </button>
-                            {gameState.status === "playing" && (
-                                <button onClick={() => endGame()}>
-                                    End Now
-                                </button>
-                            )}
-                            <button onClick={() => {
-                                pageURL.value = "";
-                            }}>
-                                Back to Menu
-                            </button>
-                        </>
-                    )}
-                    {isMultiplayer && multiplayerState.players.length > 1 && (
+                <div
+                    className={css.vbox(20)}
+                    style={{
+                        transform: this.synced.isRotated
+                            ? `rotate(90deg) scale(${this.synced.scale})`
+                            : `scale(${this.synced.scale})`,
+                        transformOrigin: "center center"
+                    }}
+                >
+                    <div className={css.hbox(20).alignItems("center").colorhsl(0, 0, 100)}>
                         <div className={css.vbox(4)}>
-                            <div className={css.fontSize(16)}>Other Players:</div>
-                            {multiplayerState.players
-                                .map((p, index) => ({ p, index }))
-                                .filter(({ index }) => index !== multiplayerState.myPlayerIndex)
-                                .map(({ p, index }) => (
-                                    <div key={p.id} className={css.fontSize(14)}>
-                                        Player {index + 1}: {p.score}
-                                    </div>
-                                ))}
-                        </div>
-                    )}
-                    {isMultiplayer && (
-                        <button onClick={() => {
-                            pageURL.value = "";
-                        }}>
-                            Back to Menu
-                        </button>
-                    )}
-                </div>
-                <div className={css.hbox(20).alignItems("start")}>
-                    <div className={css.vbox(12)}>
-                        <div
-                            ref={elem => { this.wrapper = elem || undefined; }}
-                            className={css.relative.size(totalWidth, totalHeight).userSelect("none")}
-                            onMouseDown={this.onMouseDown as any}
-                            onMouseMove={this.onMouseMove as any}
-                            onMouseUp={this.onMouseUp}
-                            onMouseLeave={this.onMouseLeave}
-                        >
-                            <div
-                                className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
-                                style={{ display: "grid", gridTemplateColumns: `repeat(${gridSize.width}, ${CELL_SIZE}px)`, gap: `${CELL_GAP}px` }}
-                            >
-                                {currentGrid.map((row, ri) =>
-                                    row.map((cell, ci) => {
-                                        let isSelected = this.isCellSelected(ri, ci);
-                                        let isPulsing = this.isCellPulsing(ri, ci);
-                                        return (
-                                            <div
-                                                key={`${ri}-${ci}`}
-                                                className={css.size(CELL_SIZE, CELL_SIZE).relative
-                                                    .hbox(0).justifyContent("center")
-                                                    .fontSize(36).fontWeight("bold")
-                                                    .borderRadius(8)
-                                                    + (isSelected
-                                                        ? css.hsl(240, 50, 10).colorhsl(0, 0, 100)
-                                                            .background("linear-gradient(135deg, rgba(0,200,255,0.3) 0%, rgba(255,0,200,0.3) 100%), #0a0a1f")
-                                                        : css.hsl(0, 0, 95).colorhsl(0, 0, 0)
-                                                    )
-                                                }
-                                                style={{
-                                                    border: isSelected ? "3px solid transparent" : "3px solid #ddd",
-                                                    backgroundImage: isSelected ? "linear-gradient(#0a0a1f, #0a0a1f), linear-gradient(135deg, #00d4ff, #ff00d4)" : undefined,
-                                                    backgroundOrigin: "border-box",
-                                                    backgroundClip: isSelected ? "padding-box, border-box" : undefined,
-                                                }}
-                                            >
-                                                {isPulsing && (
-                                                    <div
-                                                        className={css.absolute.pos(0, 0).fillBoth
-                                                            .borderRadius(8)
-                                                            + " pulse-cell"}
-                                                        style={{
-                                                            border: "2px solid rgba(255, 255, 255, 0.6)",
-                                                            backgroundColor: "transparent"
-                                                        }}
-                                                    />
-                                                )}
-                                                {cell.multiplier > 1 && (
-                                                    <div
-                                                        className={css.absolute.pos(3, 3)
-                                                            .fontSize(11).fontWeight("bold")
-                                                            .pad2(3, 2).borderRadius(4)
-                                                            .colorhsl(0, 0, 100)
-                                                            + (cell.multiplier === 2
-                                                                ? css.hsl(190, 80, 50)
-                                                                : css.hsl(45, 90, 55)
-                                                            )
-                                                        }
-                                                    >
-                                                        {cell.multiplier}W
-                                                    </div>
-                                                )}
-                                                <div
-                                                    className={css.absolute.pos(CELL_SIZE - 18, 6)
-                                                        .fontSize(12).fontWeight("normal")
-                                                        + (isSelected ? css.colorhsl(0, 0, 70) : css.colorhsl(0, 0, 40))
-                                                    }
-                                                >
-                                                    {cell.points}
-                                                </div>
-                                                {cell.letter}
-                                            </div>
-                                        );
-                                    })
-                                )}
+                            <div className={css.fontSize(32).width(100).textAlign("center")}>
+                                {formatTime(gameState.timeRemaining)}
                             </div>
-                            <canvas
-                                ref={elem => {
-                                    if (!elem) return;
-                                    this.canvas = elem;
-                                    elem.width = totalWidth;
-                                    elem.height = totalHeight;
-                                    this.redraw();
-                                }}
-                                className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
-                                style={{ pointerEvents: "none" }}
-                            />
+                            <div className={css.width(100).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
+                                <div
+                                    className={css.absolute.pos(0, 0).height(4).hsl(0, 180, 50).borderRadius(2) + ""}
+                                    style={{ width: `${timePercent}%`, transition: "width 0.1s linear" }}
+                                />
+                            </div>
                         </div>
-                        <div className={css.fontSize(22).height(32).colorhsl(0, 0, 100)
-                            .fontWeight("bold")
-                        }>
-                            {currentWord}
-                        </div>
-                    </div>
-                    <div className={css.vbox(12).colorhsl(0, 0, 100)}>
-                        <div className={css.fontSize(20).fontWeight("bold")}>
-                            Matched Words ({gameState.matchedWords.length})
-                        </div>
-                        <div className={css.vbox(6).overflowAuto.height(totalHeight)
-                            .hsl(240, 30, 15).borderRadius(8).pad2(12)
-                        }>
-                            {gameState.matchedWords.map((w, i) => (
-                                <div key={i} className={css.hbox(8).fontSize(18)}>
-                                    <span>{w.word}</span>
-                                    <span className={css.fontSize(14).opacity(0.7)}>
-                                        {w.points}
-                                    </span>
+                        <div className={css.fontSize(24).relative}>
+                            Score: {gameState.score}
+                            {this.synced.floatingScores.map(fs => (
+                                <div
+                                    key={fs.id}
+                                    className={css.absolute.pos(-30, 30).fontSize(24).fontWeight("bold")
+                                        .colorhsl(120, 70, 60) + " floating-score"}
+                                >
+                                    +{fs.points}
                                 </div>
                             ))}
                         </div>
+                        {!gameState.isMultiplayer && (
+                            <>
+                                <button onClick={() => startGame()}>
+                                    {gameState.status === "ready" && "Start Game"}
+                                    {gameState.status === "playing" && "Restart"}
+                                    {gameState.status === "finished" && "Play Again"}
+                                </button>
+                                {gameState.status === "playing" && (
+                                    <button onClick={() => endGame()}>
+                                        End Now
+                                    </button>
+                                )}
+                                <button onClick={() => {
+                                    pageURL.value = "";
+                                }}>
+                                    Back to Menu
+                                </button>
+                            </>
+                        )}
+                        {gameState.isMultiplayer && gameState.players.length > 1 && (
+                            <div className={css.vbox(4)}>
+                                {gameState.players
+                                    .map((p, index) => ({ p, index }))
+                                    .filter(({ index }) => index !== gameState.myPlayerIndex)
+                                    .map(({ p, index }) => (
+                                        <div key={p.id} className={css.fontSize(14)}>
+                                            👤 {p.score}
+                                        </div>
+                                    ))}
+                            </div>
+                        )}
+                        {gameState.isMultiplayer && (
+                            <button onClick={() => {
+                                pageURL.value = "lobby";
+                            }}>
+                                Back to Lobby
+                            </button>
+                        )}
+                    </div>
+                    <div className={css.hbox(20).alignItems("start")}>
+                        <div className={css.vbox(12)}>
+                            <div
+                                ref={elem => { this.wrapper = elem || undefined; }}
+                                className={css.relative.size(totalWidth, totalHeight).userSelect("none")}
+                                style={{ touchAction: "none" }}
+                                onMouseDown={this.onMouseDown as any}
+                                onMouseMove={this.onMouseMove as any}
+                                onMouseUp={this.onMouseUp}
+                                onMouseLeave={this.onMouseLeave}
+                                onTouchStart={this.onTouchStart as any}
+                                onTouchMove={this.onTouchMove as any}
+                                onTouchEnd={this.onTouchEnd as any}
+                                onTouchCancel={this.onTouchCancel}
+                            >
+                                <div
+                                    className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
+                                    style={{ display: "grid", gridTemplateColumns: `repeat(${gridSize.width}, ${CELL_SIZE}px)`, gap: `${CELL_GAP}px` }}
+                                >
+                                    {gameState.grid.map((row, ri) =>
+                                        row.map((cell, ci) => {
+                                            let isSelected = this.isCellSelected(ri, ci);
+                                            let isPulsing = this.isCellPulsing(ri, ci);
+                                            return (
+                                                <div
+                                                    key={`${ri}-${ci}`}
+                                                    className={css.size(CELL_SIZE, CELL_SIZE).relative
+                                                        .hbox(0).justifyContent("center")
+                                                        .fontSize(36).fontWeight("bold")
+                                                        .borderRadius(8)
+                                                        + (isSelected
+                                                            ? css.hsl(240, 50, 10).colorhsl(0, 0, 100)
+                                                                .background("linear-gradient(135deg, rgba(0,200,255,0.3) 0%, rgba(255,0,200,0.3) 100%), #0a0a1f")
+                                                            : css.hsl(0, 0, 95).colorhsl(0, 0, 0)
+                                                        )
+                                                    }
+                                                    style={{
+                                                        border: isSelected ? "3px solid transparent" : "3px solid #ddd",
+                                                        backgroundImage: isSelected ? "linear-gradient(#0a0a1f, #0a0a1f), linear-gradient(135deg, #00d4ff, #ff00d4)" : undefined,
+                                                        backgroundOrigin: "border-box",
+                                                        backgroundClip: isSelected ? "padding-box, border-box" : undefined,
+                                                    }}
+                                                >
+                                                    {isPulsing && (
+                                                        <div
+                                                            className={css.absolute.pos(0, 0).fillBoth
+                                                                .borderRadius(8)
+                                                                + " pulse-cell"}
+                                                            style={{
+                                                                border: "2px solid rgba(255, 255, 255, 0.6)",
+                                                                backgroundColor: "transparent"
+                                                            }}
+                                                        />
+                                                    )}
+                                                    {cell.multiplier > 1 && (
+                                                        <div
+                                                            className={css.absolute.pos(3, 3)
+                                                                .fontSize(11).fontWeight("bold")
+                                                                .pad2(3, 2).borderRadius(4)
+                                                                .colorhsl(0, 0, 100)
+                                                                + (cell.multiplier === 2
+                                                                    ? css.hsl(190, 80, 50)
+                                                                    : css.hsl(45, 90, 55)
+                                                                )
+                                                            }
+                                                        >
+                                                            {cell.multiplier}W
+                                                        </div>
+                                                    )}
+                                                    <div
+                                                        className={css.absolute.top(4).right(7)
+                                                            .fontSize(12).fontWeight("normal")
+                                                            .whiteSpace("nowrap")
+                                                            + (isSelected ? css.colorhsl(0, 0, 70) : css.colorhsl(0, 0, 40))
+                                                        }
+                                                    >
+                                                        {cell.points}
+                                                    </div>
+                                                    {cell.letter}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                                <canvas
+                                    ref={elem => {
+                                        if (!elem) return;
+                                        this.canvas = elem;
+                                        elem.width = totalWidth;
+                                        elem.height = totalHeight;
+                                        this.redraw();
+                                    }}
+                                    className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
+                                    style={{ pointerEvents: "none" }}
+                                />
+                            </div>
+                            <div className={css.fontSize(22).height(32).colorhsl(0, 0, 100)
+                                .fontWeight("bold")
+                            }>
+                                {currentWord}
+                            </div>
+                        </div>
+                        <div className={css.vbox(12).colorhsl(0, 0, 100).width(250)}>
+                            <div className={css.fontSize(20).fontWeight("bold")}>
+                                Matched Words ({gameState.matchedWords.length})
+                            </div>
+                            <div className={css.vbox(6).overflowAuto.height(totalHeight).fillWidth
+                                .hsl(240, 30, 15).borderRadius(8).pad2(12)
+                            }>
+                                {gameState.matchedWords.map((w, i) => (
+                                    <div key={i} className={css.hbox(8).fontSize(18)}>
+                                        <span>{w.word}</span>
+                                        <span className={css.fontSize(14).opacity(0.7)}>
+                                            {w.points}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                 </div>
-                {gameState.status === "finished" && (
+                {gameState.status === "finished" && !gameState.isMultiplayer && (
                     <div
                         className={css.fixed.pos(0, 0).fillBoth
                             .hsla(0, 0, 0, 0.85).hbox(0).justifyContent("center")
@@ -444,7 +625,7 @@ export class LetterFastGame extends preact.Component<LetterFastGameProps> {
                             {gameState.matchedWords.length > 0 && (
                                 <div className={css.vbox(6).overflowAuto.maxHeight(300)}>
                                     <div className={css.fontSize(18)}>Words:</div>
-                                    {sort(gameState.matchedWords, w => -w.points).map((w, i) => (
+                                    {sort(gameState.matchedWords.slice(), w => -w.points).map((w, i) => (
                                         <div key={i} className={css.hbox(12).fontSize(16)}>
                                             <span>{w.word}</span>
                                             <span className={css.opacity(0.7)}>
