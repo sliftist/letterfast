@@ -1,8 +1,10 @@
 import { createRPC } from "./rpc/createRPC";
 import { GridCell, gameState } from "./GameState";
 import * as GameManager from "./GameManager";
-import { onLastCallerDisconnect, getLastFunctionCaller } from "./rpc/FunctionCaller";
+import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
+
+const MAX_WORDS_PER_PLAYER = 10000;
 
 function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentifier): void {
     onLastCallerDisconnect(() => {
@@ -27,7 +29,10 @@ const serverHandlers = {
         setupPlayerDisconnect(result.gameId, player);
 
         const players = GameManager.getPlayerScores(result.gameId);
-        void player.onPlayerUpdate(result.gameId, players, "waiting", 0);
+        // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
+        setImmediate(() => {
+            void player.onPlayerUpdate(result.gameId, players, "waiting", 0);
+        });
         return result;
     },
 
@@ -72,14 +77,18 @@ const serverHandlers = {
 
         if (game) {
             const players = GameManager.getPlayerScores(sanitized);
-            GameManager.broadcastToGame(sanitized, (playerClient, playerIndex) => {
-                console.log("onPlayerUpdate", playerClient, playerIndex);
-                void playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
-            });
+            // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
+            setImmediate(() => {
+                GameManager.broadcastToGame(sanitized, (playerClient, playerIndex) => {
+                    console.log("onPlayerUpdate", playerClient, playerIndex);
+                    void playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
+                });
 
-            if (game.status === "playing" && game.startTime) {
-                void player.onGameStart(sanitized, game.grid, game.startTime, game.gameDuration);
-            }
+
+                if (game.status === "playing" && game.startTime) {
+                    void player.onGameStart(sanitized, game.grid, game.startTime, game.gameDuration);
+                }
+            });
         }
     },
 
@@ -133,7 +142,13 @@ const serverHandlers = {
             throw new Error(`Game ${gameId} not found`);
         }
 
-        const result = GameManager.submitWord({ gameId, player, word, cells });
+        const playerWordCount = GameManager.getPlayerWordCount(gameId, player);
+        if (playerWordCount >= MAX_WORDS_PER_PLAYER) {
+            disconnectLastCaller();
+            throw new Error(`Word limit exceeded: ${MAX_WORDS_PER_PLAYER}`);
+        }
+
+        const result = await GameManager.submitWord({ gameId, player, word, cells });
         const players = GameManager.getPlayerScores(gameId);
         GameManager.broadcastToGame(gameId, (client, playerIndex) => {
             void client.onPlayerUpdate(gameId, players, game.status, playerIndex);

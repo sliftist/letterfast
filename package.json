@@ -9,10 +9,17 @@
     "scripts": {
         "server": "yarn typenode ./web/server.ts",
         "type": "yarn tsc --noEmit",
-        "build-web": "build-web",
+        "build-words": "node scripts/buildWordsJS.js",
+        "build-web": "yarn build-words && build-web --indexHtml ./index.html",
         "watch-web": "slift-watch --port 9877 \"web/*.ts\" \"web/*.tsx\" \"yarn build-web\"",
         "watch": "yarn watch-web",
-        "build": "yarn build-web"
+        "build": "yarn build-web",
+        "upload-words": "yarn build-words && node scripts/uploadWords.js",
+        "deploy-static": "local-deploy-static.bat",
+        "d": "yarn deploy-static",
+        "deploy-server": "local-deploy-server.bat",
+        "deploy-app": "local-deploy-app.bat",
+        "deploy": "local-deploy-static.bat && local-deploy-app.bat"
     },
     "resolutions": {
         "preact": "npm:preact-old-types@*",

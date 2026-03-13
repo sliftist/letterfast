@@ -3,6 +3,7 @@ import { PromiseObj } from "./PromiseObj";
 export interface FunctionCallerInterface {
     call(method: string, args: unknown[]): Promise<unknown>;
     onDisconnect(callback: () => void): void;
+    disconnect(): void;
 }
 
 type RPCMessage =
@@ -13,6 +14,13 @@ type RPCMessage =
 let lastFunctionCaller: FunctionCallerInterface | undefined;
 export function getLastFunctionCaller(): FunctionCallerInterface | undefined {
     return lastFunctionCaller;
+}
+
+export function disconnectLastCaller(): void {
+    if (!lastFunctionCaller) {
+        throw new Error(`No active caller to disconnect`);
+    }
+    lastFunctionCaller.disconnect();
 }
 
 export function onLastCallerDisconnect(callback: () => void): void {
@@ -29,6 +37,7 @@ export function createFunctionCaller(config: {
     onMessage: (handler: (message: string) => void) => void;
     onCall: (call: { method: string; args: unknown[] }) => Promise<unknown>;
     onDisconnect?: (handler: () => void) => void;
+    disconnect?: () => void;
 }): FunctionCallerInterface {
     const callerId = functionCallerCount++;
     const pendingCalls = new Map<string, PromiseObj<unknown>>();
@@ -80,6 +89,11 @@ export function createFunctionCaller(config: {
         },
         onDisconnect(callback: () => void): void {
             disconnectCallbacks.push(callback);
+        },
+        disconnect(): void {
+            if (config.disconnect) {
+                config.disconnect();
+            }
         }
     };
     return self;

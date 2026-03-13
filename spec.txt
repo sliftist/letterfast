@@ -1,31 +1,23 @@
+Fix the fat finger problem with mobile dragging. 
+
+Better Mobile support
+    tactile feedback
+    Better dragging support 
+    full screen?
+
+When generating words, make sure there are a minimum of four vowels. And also a minimum of six consonants. 
+
+When the game restarts, it doesn't restart the player's scores, and so they have their previous scores from last game before you play a word?
+
+Penalty for wrong words
+    -1 point per word guesses that isn't a word
+        This is kind of weird as we know if it's a word or not client-side, but that's fine. And so we'll call a special endpoint client-side if the user picked a word that's not a word. Also, when they do, we should change the kind of flash around the letters that are picked as being red and add some more red coloring temporarily to show them that they did the wrong thing (And instead of having the nice plus number in green, it'll be a negative one in red)
+        - And then we'll have to keep track of their total negative score as well, and we'll show that at the end in the summary pages (there are a few).
+    - Allow pressing the escape key to cancel so you don't accidentally select the wrong letter and be forced to take a negative. Also, add a place where you can drag to that shows a big like X, and if you drag to there, it cancels the drag as well. Probably just the entire 
 
 
 
-
-When dragging, first we should of course check if the mouse is in the collision area for a tile, Then we should check the line from the last selected tile to the current position, and if that intersects a tile, we should. Should select that tile, selecting the one closest to the last selected tile. That way, if they select really quickly and they jump from one tile all the way across the board, we can select the intermediate tiles, as it's very possible for them to move their mouse this fast, moving across the entire board within one frame. 
-
-
-
-
-
-
-
-Review security
-
-Ask the AI to review security
-
-use an always-up wrapper
-
-- Have the server host the files
-    - And build them?
-
-Deploy to quentinbrooks.com
-
-Make custom domain for it with cloudflare
-
-
-
-
+Show endpoint error in the client, automatically reconnect to the server, and show when we are disconnected.
 
 Better game lobby display
     - When we finish, we show too much information. We show the list of players, but we also show the final scores. Those are redundant. We should be using the same UI for it and just have the score, the ranking, and the words only show if we have that information. 
@@ -33,13 +25,13 @@ Better game lobby display
 In single player auto start if they don't do anything after 5 seconds
 
 Do some testing with a lot of words found
+    - I assume we don't have enough overflow auto, and so it will break the UI
 
 
+portrait mode for the phone
+    - as it's easier to hold a phone in portrait mode.
+    - We need to rearrange the UI. By putting the word matches below And by moving the buttons to the next line. So we have the time score, under that we have the buttons, under that we have the grid, and then under that we have the matched words. 
 
-Mobile support
-    ensure touch support works
-    tactile feedback
-    orientation support (always orient in the same way)
 
 Fix the single player game over screen on mobile
     - Make a universal game over screen that can show the score anywhere we need it (multiplayer, etc), and have this show as a page instead of some kind of weird pop-up. 
@@ -49,15 +41,14 @@ Fix the single player game over screen on mobile
         - Zip and unzip them?
     - Download the dictionaries on load, with progress.
 
-- Better UI
-
 - Make it so that start click area is larger for the first letter.
 
 - Sounds
 
-- Saved state, so you can refresh and not break a multiplayer game
-
 - History mode, which will let you view the finish screen for old games 
     - Change the finish screen so it's inline, instead of using a popup
 
-- Penalty for wrong words
+
+- Add network level DDoS protection. 
+
+- Add endpoint level DDoS protection. 

@@ -9,7 +9,14 @@ export function getRPCClient(): ReturnType<typeof getClient> {
     }
 
     if (!rpcClientInstance) {
-        rpcClientInstance = getClient("ws://localhost:8080", clientHandlers as any);
+        let host = window.location.hostname;
+        let protocol = "wss";
+        if (window.location.protocol === "file:") {
+            protocol = "ws";
+            host = "localhost";
+        }
+        const wsUrl = `${protocol}://${host}:7276`;
+        rpcClientInstance = getClient(wsUrl, clientHandlers as any);
     }
 
     return rpcClientInstance;

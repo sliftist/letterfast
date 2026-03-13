@@ -91,7 +91,7 @@ export class GameResults extends preact.Component {
 
                     <button
                         onClick={() => {
-                            pageURL.value = "";
+                            pageURL.value = "config";
                         }}
                         className={css.fontSize(20).pad2(16, 12) + ""}
                     >

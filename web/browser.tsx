@@ -11,7 +11,9 @@ import { configureMobxNextFrameScheduler } from "sliftutils/render-utils/mobxTyp
 
 async function main() {
     if (isNode()) return;
-    await enableHotReloading({ port: 9877 });
+    if (location.origin.startsWith("file:")) {
+        await enableHotReloading({ port: 9877 });
+    }
     configureMobxNextFrameScheduler();
     preact.render(<Page />, document.getElementById("app")!);
 }

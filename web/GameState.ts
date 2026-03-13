@@ -57,13 +57,25 @@ export const LETTER_FREQUENCY = "EEEEEEEEEEEEETTTTTTTTTAAAAAAAAAOOOOOOOOIIIIIIIN
 
 
 let wordSet: Set<string> | undefined;
-export function getWordSet() {
+let wordSetPromise: Promise<Set<string>> | undefined;
+
+export async function getWordSet(): Promise<Set<string>> {
     if (wordSet) return wordSet;
-    wordSet = new Set(getWords().map(w => w.toLowerCase()));
-    return wordSet;
+    if (wordSetPromise) return wordSetPromise;
+
+    wordSetPromise = getWords().then(words => {
+        wordSet = new Set(words.map(w => w.toLowerCase()));
+        return wordSet;
+    });
+
+    return wordSetPromise;
 }
+
 if (!isNode()) {
-    getWordSet();
+    // Preload
+    setImmediate(() => {
+        void getWordSet();
+    });
 }
 
 export function generateGameGrid(seed: number, width: number, height: number): GridCell[][] {

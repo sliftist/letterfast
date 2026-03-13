@@ -140,12 +140,12 @@ export function endGame(gameId: string): void {
     game.status = "finished";
 }
 
-export function submitWord(config: {
+export async function submitWord(config: {
     gameId: string;
     player: PlayerIdentifier;
     word: string;
     cells: { row: number; col: number }[];
-}): { points: number } {
+}): Promise<{ points: number }> {
     const game = games.get(config.gameId);
     if (!game) {
         throw new Error(`Game ${config.gameId} not found`);
@@ -163,7 +163,8 @@ export function submitWord(config: {
     }
 
     const wordLower = config.word.toLowerCase();
-    if (!getWordSet().has(wordLower)) {
+    const wordSet = await getWordSet();
+    if (!wordSet.has(wordLower)) {
         throw new Error(`Word ${config.word} is not in dictionary`);
     }
 
@@ -175,6 +176,17 @@ export function submitWord(config: {
         if (!isAdjacent(config.cells[i - 1], config.cells[i])) {
             throw new Error(`Cells are not adjacent`);
         }
+    }
+
+    const spelledWord = config.cells.map(cell => {
+        if (!game.grid[cell.row] || !game.grid[cell.row][cell.col]) {
+            throw new Error(`Invalid cell position: row ${cell.row}, col ${cell.col}`);
+        }
+        return game.grid[cell.row][cell.col].letter;
+    }).join("");
+
+    if (spelledWord.toLowerCase() !== wordLower) {
+        throw new Error(`Cells do not spell the word ${config.word}, they spell ${spelledWord}`);
     }
 
     const playerWords = game.words.get(config.player) || [];
@@ -200,6 +212,14 @@ export function getPlayerScores(gameId: string): { id: string; score: number }[]
         id: `player${index + 1}`,
         score: game.scores.get(player) || 0
     }));
+}
+
+export function getPlayerWordCount(gameId: string, player: PlayerIdentifier): number {
+    const game = games.get(gameId);
+    if (!game) return 0;
+    const playerWords = game.words.get(player);
+    if (!playerWords) return 0;
+    return playerWords.length;
 }
 
 export function getAllWords(gameId: string): Record<string, { word: string; points: number }[]> {

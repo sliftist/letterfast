@@ -7,7 +7,7 @@ import { GameConfig } from "./GameConfig";
 import { GameLobby } from "./GameLobby";
 import { GameResults } from "./GameResults";
 
-export const pageURL = new URLParam("page");
+export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
 
 @observer
@@ -42,7 +42,7 @@ export class Page extends preact.Component {
     render() {
         let pages = [
             {
-                key: "",
+                key: "config",
                 content: <GameConfig />
             },
             {

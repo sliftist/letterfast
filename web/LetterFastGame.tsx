@@ -37,6 +37,59 @@ const HEADER_HEIGHT_ESTIMATE = 50;
 const CURRENT_WORD_HEIGHT = 32;
 const BELOW_GRID_GAP = 12;
 
+function lineIntersectsCell(
+    lineStart: { x: number; y: number },
+    lineEnd: { x: number; y: number },
+    row: number,
+    col: number
+): boolean {
+    const cellLeft = col * (CELL_SIZE + CELL_GAP);
+    const cellTop = row * (CELL_SIZE + CELL_GAP);
+    const cellRight = cellLeft + CELL_SIZE;
+    const cellBottom = cellTop + CELL_SIZE;
+
+    if (lineStart.x >= cellLeft && lineStart.x <= cellRight &&
+        lineStart.y >= cellTop && lineStart.y <= cellBottom) return true;
+    if (lineEnd.x >= cellLeft && lineEnd.x <= cellRight &&
+        lineEnd.y >= cellTop && lineEnd.y <= cellBottom) return true;
+
+    const steps = 20;
+    for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = lineStart.x + (lineEnd.x - lineStart.x) * t;
+        const y = lineStart.y + (lineEnd.y - lineStart.y) * t;
+        if (x >= cellLeft && x <= cellRight && y >= cellTop && y <= cellBottom) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function getCellsAlongLine(
+    lineStart: { x: number; y: number },
+    lineEnd: { x: number; y: number },
+    gridSize: { width: number; height: number }
+): { row: number; col: number; distance: number }[] {
+    const cells: { row: number; col: number; distance: number }[] = [];
+
+    for (let row = 0; row < gridSize.height; row++) {
+        for (let col = 0; col < gridSize.width; col++) {
+            if (lineIntersectsCell(lineStart, lineEnd, row, col)) {
+                const center = cellCenter(row, col);
+                const dx = center.x - lineStart.x;
+                const dy = center.y - lineStart.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                cells.push({ row, col, distance });
+            }
+        }
+    }
+
+    cells.sort((a, b) => a.distance - b.distance);
+
+    return cells;
+}
+
 function redrawCanvas(
     canvas: HTMLCanvasElement,
     selectedCells: { row: number; col: number }[],
@@ -216,12 +269,24 @@ export class LetterFastGame extends preact.Component {
         if (!this.synced.drawing || gameState.status !== "playing") return;
         let pos = this.getRelativePos(e);
         this.synced.currentPos = pos;
-        let cell = getCellAt(pos);
-        if (cell && !this.isCellSelected(cell.row, cell.col)) {
-            let cells = this.synced.selectedCells;
-            let last = cells[cells.length - 1];
-            if (!last || isAdjacent(last, cell)) {
-                this.synced.selectedCells.push(cell);
+
+        let cells = this.synced.selectedCells;
+        let last = cells[cells.length - 1];
+        if (!last) {
+            let cell = getCellAt(pos);
+            if (cell) this.synced.selectedCells.push(cell);
+        } else {
+            const lastCenter = cellCenter(last.row, last.col);
+            const gridSize = getCurrentGridSize();
+            const cellsAlongLine = getCellsAlongLine(lastCenter, pos, gridSize);
+
+            for (const candidateCell of cellsAlongLine) {
+                if (!this.isCellSelected(candidateCell.row, candidateCell.col)) {
+                    const currentLast = this.synced.selectedCells[this.synced.selectedCells.length - 1];
+                    if (currentLast && isAdjacent(currentLast, candidateCell)) {
+                        this.synced.selectedCells.push(candidateCell);
+                    }
+                }
             }
         }
         this.redraw();
@@ -239,7 +304,8 @@ export class LetterFastGame extends preact.Component {
             .join("")
             .toLowerCase();
 
-        if (word.length > 1 && getWordSet().has(word)) {
+        const wordSet = await getWordSet();
+        if (word.length > 1 && wordSet.has(word)) {
             if (gameState.isMultiplayer) {
                 if (!isNode() && gameState.gameId) {
                     const rpc = getRPCClient();
@@ -301,12 +367,24 @@ export class LetterFastGame extends preact.Component {
         let touch = e.touches[0];
         let pos = this.getRelativePos(touch);
         this.synced.currentPos = pos;
-        let cell = getCellAt(pos);
-        if (cell && !this.isCellSelected(cell.row, cell.col)) {
-            let cells = this.synced.selectedCells;
-            let last = cells[cells.length - 1];
-            if (!last || isAdjacent(last, cell)) {
-                this.synced.selectedCells.push(cell);
+
+        let cells = this.synced.selectedCells;
+        let last = cells[cells.length - 1];
+        if (!last) {
+            let cell = getCellAt(pos);
+            if (cell) this.synced.selectedCells.push(cell);
+        } else {
+            const lastCenter = cellCenter(last.row, last.col);
+            const gridSize = getCurrentGridSize();
+            const cellsAlongLine = getCellsAlongLine(lastCenter, pos, gridSize);
+
+            for (const candidateCell of cellsAlongLine) {
+                if (!this.isCellSelected(candidateCell.row, candidateCell.col)) {
+                    const currentLast = this.synced.selectedCells[this.synced.selectedCells.length - 1];
+                    if (currentLast && isAdjacent(currentLast, candidateCell)) {
+                        this.synced.selectedCells.push(candidateCell);
+                    }
+                }
             }
         }
         this.redraw();
@@ -325,7 +403,8 @@ export class LetterFastGame extends preact.Component {
             .join("")
             .toLowerCase();
 
-        if (word.length > 1 && getWordSet().has(word)) {
+        const wordSet = await getWordSet();
+        if (word.length > 1 && wordSet.has(word)) {
             if (gameState.isMultiplayer) {
                 if (!isNode() && gameState.gameId) {
                     const rpc = getRPCClient();
@@ -371,6 +450,7 @@ export class LetterFastGame extends preact.Component {
         this.redraw();
 
         let timePercent = (gameState.timeRemaining / gameState.gameDuration) * 100;
+        let timeBarHue = gameState.timeRemaining <= 5000 && 0 || gameState.timeRemaining <= 15000 && 60 || 120;
 
         return (
             <div className={css.fillBoth.vbox(20)
@@ -417,7 +497,7 @@ export class LetterFastGame extends preact.Component {
                             </div>
                             <div className={css.width(100).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
                                 <div
-                                    className={css.absolute.pos(0, 0).height(4).hsl(0, 180, 50).borderRadius(2) + ""}
+                                    className={css.absolute.pos(0, 0).height(4).hsl(timeBarHue, 70, 50).borderRadius(2) + ""}
                                     style={{ width: `${timePercent}%`, transition: "width 0.1s linear" }}
                                 />
                             </div>
@@ -447,7 +527,7 @@ export class LetterFastGame extends preact.Component {
                                     </button>
                                 )}
                                 <button onClick={() => {
-                                    pageURL.value = "";
+                                    pageURL.value = "config";
                                 }}>
                                     Back to Menu
                                 </button>

@@ -1,13 +1,33 @@
 import * as http from "http";
+import * as https from "https";
+import * as fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { createFunctionCaller } from "./FunctionCaller";
 
 export function createServerRPC<T extends Record<string, (...args: any[]) => Promise<any>>>(handlers: T) {
-    return function startServer(config: { port: number }) {
-        const server = http.createServer((req, res) => {
-            res.writeHead(200, { "Content-Type": "text/plain" });
-            res.end("WebSocket RPC Server");
-        });
+    return function startServer(config: { 
+        port: number;
+        ssl?: {
+            certPath: string;
+            keyPath: string;
+        };
+    }) {
+        let server: http.Server | https.Server;
+
+        if (config.ssl) {
+            const cert = fs.readFileSync(config.ssl.certPath, "utf8");
+            const key = fs.readFileSync(config.ssl.keyPath, "utf8");
+            
+            server = https.createServer({ cert, key }, (req, res) => {
+                res.writeHead(200, { "Content-Type": "text/plain" });
+                res.end("WebSocket RPC Server (Secure)");
+            });
+        } else {
+            server = http.createServer((req, res) => {
+                res.writeHead(200, { "Content-Type": "text/plain" });
+                res.end("WebSocket RPC Server");
+            });
+        }
 
         const wss = new WebSocketServer({ server });
 
@@ -46,12 +66,16 @@ export function createServerRPC<T extends Record<string, (...args: any[]) => Pro
                 },
                 onDisconnect: (handler: () => void) => {
                     disconnectCallbacks.push(handler);
+                },
+                disconnect: () => {
+                    ws.close();
                 }
             });
         });
 
         server.listen(config.port, () => {
-            console.log(`WebSocket RPC server listening on port ${config.port}`);
+            const protocol = config.ssl ? "wss" : "ws";
+            console.log(`WebSocket RPC server (${protocol}) listening on port ${config.port}`);
         });
 
         return server;

@@ -41,6 +41,9 @@ export function createClientRPC<T extends Record<string, (...args: any[]) => Pro
                 throw new Error(`Client method ${call.method} not found. Available methods: ${availableMethods}`);
             }
             return await handler(...call.args);
+        },
+        disconnect: () => {
+            ws.close();
         }
     });
 

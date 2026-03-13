@@ -32,7 +32,7 @@ export class GameLobby extends preact.Component {
 
     async componentDidMount() {
         if (!gameState.gameId) {
-            pageURL.value = "";
+            pageURL.value = "config";
             return;
         }
 
@@ -69,7 +69,7 @@ export class GameLobby extends preact.Component {
         gameState.myPlayerIndex = undefined;
         gameState.players = [];
         gameState.allWords = {};
-        pageURL.value = "";
+        pageURL.value = "config";
     };
 
     onUpdateSettings = async () => {
