@@ -1,3 +1,5 @@
+Maybe seed some rare letters, fix them, and then try to adjust the other letters to get more words, aiming for a high amount of 5+ letter words.
+    - We need to appropriately account for larger grids from the beginning. 
 
 Show endpoint errors in the client, automatically reconnect to the server, and show when we are disconnected.
 
