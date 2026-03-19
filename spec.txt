@@ -8,6 +8,17 @@ Better game lobby display
 
 In single player auto start if they don't do anything after 5 seconds
 
+Use a frequency dictionary and we can show some of the frequently used English words that they missed
+Show any slight modifications towards that they guessed that they missed. I think just one or two letters off should be fine preferring the ones they’re just one letter off, especially if that letter is at the end or the beginning.
+Show the most valuable word that they missed
+Have a mode where a lot of tiles are multiple letters based on how they phonetically sound
+Add a challenge mode where after you finish a set, you can challenge another friend create a link. You can then check to see if they finished it and their score. We’re gonna want some kind of ID system not really an account just an ID which they can export if they want to keep track of it.
+
+Add a "live challenge" button, which enters a multi-player game, which starts immediately when they join.
+
+Organize multiplayer page, making it more clear how to share when you are in the lobby, AND add a share link while in the game.
+    - Can we support sharing to a messaging app?
+
 Do some testing with a lot of words found
     - I assume we don't have enough overflow auto, and so it will break the UI
 
