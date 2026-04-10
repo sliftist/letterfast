@@ -924,51 +924,39 @@ export class LetterFastGame extends preact.Component {
     renderButtons() {
         return (
             <>
+                <button onClick={async () => await startGame()}>
+                    {gameState.status === "ready" && "Start Game"}
+                    {gameState.status === "playing" && "Restart"}
+                    {gameState.status === "finished" && "Play Again"}
+                </button>
+                {gameState.status === "playing" && (
+                    <button onClick={() => endGame()}>
+                        End Now
+                    </button>
+                )}
+                {gameState.status === "ready" && !gameState.isMultiplayer && (
+                    <button onClick={async () => {
+                        const defaults = { gridWidth: 4, gridHeight: 4, gameDuration: 90000 };
+                        await changeGridSize({ width: defaults.gridWidth, height: defaults.gridHeight });
+                        gameState.gameDuration = defaults.gameDuration;
+                        gameState.timeRemaining = defaults.gameDuration;
+                        saveConfig(defaults);
+                    }}>
+                        Default
+                    </button>
+                )}
+                <button onClick={() => this.toggleFullscreen()}>
+                    {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
+                </button>
                 {!gameState.isMultiplayer && (
-                    <>
-                        <button onClick={async () => await startGame()}>
-                            {gameState.status === "ready" && "Start Game"}
-                            {gameState.status === "playing" && "Restart"}
-                            {gameState.status === "finished" && "Play Again"}
-                        </button>
-                        {gameState.status === "playing" && (
-                            <button onClick={() => endGame()}>
-                                End Now
-                            </button>
-                        )}
-                        {gameState.status === "ready" && (
-                            <button onClick={async () => {
-                                const defaults = { gridWidth: 4, gridHeight: 4, gameDuration: 90000 };
-                                await changeGridSize({ width: defaults.gridWidth, height: defaults.gridHeight });
-                                gameState.gameDuration = defaults.gameDuration;
-                                gameState.timeRemaining = defaults.gameDuration;
-                                saveConfig(defaults);
-                            }}>
-                                Default
-                            </button>
-                        )}
-                        <button onClick={() => this.toggleFullscreen()}>
-                            {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
-                        </button>
-                        <button onClick={() => {
-                            pageURL.value = "config";
-                        }}>
-                            Settings
-                        </button>
-                        <button
-                            onClick={this.convertToMultiplayer}
-                            disabled={this.synced.isConverting}
-                            className={css.hsl(200, 60, 40) + ""}
-                        >
-                            {this.synced.isConverting && "Converting..." || "Convert to Multiplayer"}
-                        </button>
-                    </>
+                    <button onClick={() => {
+                        pageURL.value = "config";
+                    }}>
+                        Settings
+                    </button>
                 )}
                 {gameState.isMultiplayer && (
                     <>
-                        <button onClick={() => this.toggleFullscreen()}>
-                            {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
-                        </button>
                         <button
                             onClick={this.copyShareLink}
                             className={css.hsl(120, 60, 40) + ""}
@@ -984,6 +972,19 @@ export class LetterFastGame extends preact.Component {
                     </>
                 )}
             </>
+        );
+    }
+
+    renderMultiplayerButton() {
+        if (gameState.isMultiplayer) return undefined;
+        return (
+            <button
+                onClick={this.convertToMultiplayer}
+                disabled={this.synced.isConverting}
+                className={css.hsl(200, 60, 40) + ""}
+            >
+                {this.synced.isConverting && "Converting..." || "Convert to Multiplayer"}
+            </button>
         );
     }
 
@@ -1219,13 +1220,24 @@ export class LetterFastGame extends preact.Component {
                 >
                     {this.synced.isRotated && (
                         <>
-                            <div className={css.hbox(20).alignItems("center").colorhsl(0, 0, 100)}>
+                            <div className={css.hbox(20).alignItems("start").colorhsl(0, 0, 100)}>
                                 {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                {this.renderPlayerScores()}
-                            </div>
-                            {this.renderConnectionStatus()}
-                            <div className={css.hbox(12).wrap.colorhsl(0, 0, 100)}>
-                                {this.renderButtons()}
+                                <div className={css.vbox(8)}>
+                                    <div className={css.hbox(12).wrap}>
+                                        {this.renderButtons()}
+                                    </div>
+                                    {!gameState.isMultiplayer && (
+                                        <div className={css.hbox(12).wrap}>
+                                            {this.renderMultiplayerButton()}
+                                        </div>
+                                    )}
+                                    {gameState.isMultiplayer && (
+                                        <div className={css.hbox(20).wrap}>
+                                            {this.renderConnectionStatus()}
+                                            {this.renderPlayerScores()}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                             <div className={css.vbox(12)}>
                                 {this.renderGrid(totalWidth, totalHeight, gridSize)}
@@ -1236,14 +1248,25 @@ export class LetterFastGame extends preact.Component {
                     )}
                     {!this.synced.isRotated && (
                         <>
-                            <div className={css.hbox(20).alignItems("center").wrap.colorhsl(0, 0, 100)}>
+                            <div className={css.hbox(20).alignItems("start").colorhsl(0, 0, 100)}>
                                 {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                <div className={css.hbox(12).wrap}>
-                                    {this.renderButtons()}
+                                <div className={css.vbox(8)}>
+                                    <div className={css.hbox(12).wrap}>
+                                        {this.renderButtons()}
+                                    </div>
+                                    {!gameState.isMultiplayer && (
+                                        <div className={css.hbox(12).wrap}>
+                                            {this.renderMultiplayerButton()}
+                                        </div>
+                                    )}
+                                    {gameState.isMultiplayer && (
+                                        <div className={css.hbox(20).wrap}>
+                                            {this.renderConnectionStatus()}
+                                            {this.renderPlayerScores()}
+                                        </div>
+                                    )}
                                 </div>
-                                {this.renderPlayerScores()}
                             </div>
-                            {this.renderConnectionStatus()}
                             <div className={css.hbox(20).alignItems("start")}>
                                 <div className={css.vbox(12)}>
                                     {this.renderGrid(totalWidth, totalHeight, gridSize)}

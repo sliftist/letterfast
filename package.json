@@ -19,7 +19,12 @@
         "d": "yarn deploy-static",
         "deploy-server": "local-deploy-server.bat",
         "deploy-app": "local-deploy-app.bat",
-        "deploy": "local-deploy-static.bat && local-deploy-app.bat"
+        "deploy": "local-deploy-static.bat && local-deploy-app.bat",
+        "deploy-static-mac": "bash local-deploy-static.sh",
+        "d-mac": "yarn deploy-static-mac",
+        "deploy-server-mac": "bash local-deploy-server.sh",
+        "deploy-app-mac": "bash local-deploy-app.sh",
+        "deploy-mac": "bash local-deploy-static.sh && bash local-deploy-app.sh"
     },
     "resolutions": {
         "preact": "npm:preact-old-types@*",
