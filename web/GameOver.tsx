@@ -121,16 +121,74 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                         )}
                                     </div>
 
+                                    {isSinglePlayer && !this.synced.isLoading && this.synced.analysis && (
+                                        <div className={css.vbox(16)}>
+                                            {this.synced.analysis.commonMissedWords.length > 0 && (
+                                                <div className={css.vbox(8)}>
+                                                    <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
+                                                        Common Missed Words
+                                                    </div>
+                                                    <div className={css.hbox(8).wrap}>
+                                                        {this.synced.analysis.commonMissedWords.map((w, i) => (
+                                                            <div key={i} className={css.fontSize(14)
+                                                                .pad2(6, 4).borderRadius(4)
+                                                                .hsl(240, 40, 30).opacity(0.5)
+                                                            }>
+                                                                {w.word} ({w.points})
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {this.synced.analysis.valuableMissedWords.length > 0 && (
+                                                <div className={css.vbox(8)}>
+                                                    <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
+                                                        Most Valuable Missed Words
+                                                    </div>
+                                                    <div className={css.hbox(8).wrap}>
+                                                        {this.synced.analysis.valuableMissedWords.map((w, i) => (
+                                                            <div key={i} className={css.fontSize(14)
+                                                                .pad2(6, 4).borderRadius(4)
+                                                                .hsl(240, 40, 30).opacity(0.5)
+                                                            }>
+                                                                {w.word} ({w.points})
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {this.synced.analysis.nearMissWords.length > 0 && (
+                                                <div className={css.vbox(8)}>
+                                                    <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
+                                                        Near Miss Opportunities
+                                                    </div>
+                                                    <div className={css.hbox(8).wrap}>
+                                                        {this.synced.analysis.nearMissWords.map((w, i) => (
+                                                            <div key={i} className={css.fontSize(14)
+                                                                .pad2(6, 4).borderRadius(4)
+                                                                .hsl(240, 40, 30).opacity(0.5)
+                                                            }>
+                                                                {w.word} ({w.points})
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {words.length > 0 && (
                                         <div className={css.vbox(6)}>
-                                            <div className={css.fontSize(isSinglePlayer ? 18 : 16).opacity(0.7)}>
-                                                Words ({words.length}):
+                                            <div className={css.fontSize(isSinglePlayer ? 20 : 16).fontWeight("bold").colorhsl(120, 60, 60)}>
+                                                {isSinglePlayer ? "Words You Found" : `Words`} ({words.length}):
                                             </div>
                                             <div className={css.hbox(8).wrap.overflowAuto.maxHeight(200)}>
                                                 {sort(words.slice(), w => -w.points).map((w, i) => (
                                                     <div key={i} className={css.fontSize(14)
                                                         .pad2(6, 4).borderRadius(4)
-                                                        .hsl(240, 40, 30)
+                                                        .hsl(120, 40, 30)
                                                     }>
                                                         {w.word} ({w.points})
                                                     </div>
@@ -142,64 +200,6 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             );
                         })}
                     </div>
-
-                    {isSinglePlayer && !this.synced.isLoading && this.synced.analysis && (
-                        <div className={css.vbox(16)}>
-                            {this.synced.analysis.commonMissedWords.length > 0 && (
-                                <div className={css.vbox(8)}>
-                                    <div className={css.fontSize(20).fontWeight("bold")}>
-                                        Common Missed Words
-                                    </div>
-                                    <div className={css.hbox(8).wrap}>
-                                        {this.synced.analysis.commonMissedWords.map((w, i) => (
-                                            <div key={i} className={css.fontSize(14)
-                                                .pad2(6, 4).borderRadius(4)
-                                                .hsl(240, 40, 30)
-                                            }>
-                                                {w.word} ({w.points})
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {this.synced.analysis.valuableMissedWords.length > 0 && (
-                                <div className={css.vbox(8)}>
-                                    <div className={css.fontSize(20).fontWeight("bold")}>
-                                        Most Valuable Missed Words
-                                    </div>
-                                    <div className={css.hbox(8).wrap}>
-                                        {this.synced.analysis.valuableMissedWords.map((w, i) => (
-                                            <div key={i} className={css.fontSize(14)
-                                                .pad2(6, 4).borderRadius(4)
-                                                .hsl(240, 40, 30)
-                                            }>
-                                                {w.word} ({w.points})
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {this.synced.analysis.nearMissWords.length > 0 && (
-                                <div className={css.vbox(8)}>
-                                    <div className={css.fontSize(20).fontWeight("bold")}>
-                                        Near Miss Opportunities
-                                    </div>
-                                    <div className={css.hbox(8).wrap}>
-                                        {this.synced.analysis.nearMissWords.map((w, i) => (
-                                            <div key={i} className={css.fontSize(14)
-                                                .pad2(6, 4).borderRadius(4)
-                                                .hsl(240, 40, 30)
-                                            }>
-                                                {w.word} ({w.points})
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
 
                     <button onClick={() => {
                         closeAllModals();
