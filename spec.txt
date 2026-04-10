@@ -1,13 +1,5 @@
-
-
-Remove multiplayer screen, so there is only the setup game page, and play page (and get rid of links on setup page which start a multiplayer game).
-    - On play page add a button which converts the current game to multiplayer
-    - When in multiplayer mode connect to the server, show the server status, and auto reconnect after 5 seconds if we disconnect (and retry every 15 seconds on connection failure).
-    - Autostart when in multiplayer mode and we have > 1 players
-    - Allow converting to multiplayer at any time
-        - button to copy link, which is just the current url
-    - Show connection status
-    - Make it easy to go back to single player
+- When in multiplayer mode connect to the server, show the server status, and auto reconnect after 5 seconds if we disconnect (and retry every 15 seconds on connection failure).
+- Fix multiplayer
 
 
 Setting to allow showing how many words per letter are left

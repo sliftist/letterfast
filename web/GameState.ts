@@ -55,6 +55,7 @@ export interface GameState {
         signature: string;
         publicKey: string;
     };
+    connectionStatus: "disconnected" | "connecting" | "connected" | "error";
 }
 
 export interface GameHistory {
@@ -147,6 +148,7 @@ export const gameState = observable<GameState>({
     isChallengeMode: false,
     challengerData: undefined,
     challengeMetadata: undefined,
+    connectionStatus: "disconnected",
 });
 
 void generateGrid().then(grid => {

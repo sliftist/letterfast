@@ -205,7 +205,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     </div>
 
                     <button onClick={() => {
-                        challengeURL.value = undefined;
+                        challengeURL.reset();
                         closeAllModals();
                         onPlayAgain();
                     }}>
@@ -218,7 +218,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             const challengeId = crypto.randomUUID();
                             const publicKey = await getPublicKey();
                             const signature = await signPayload({ challengeId });
-                            
+
                             challengeURL.value = {
                                 grid: state.grid,
                                 challengerWords: selfPlayer.matchedWords,

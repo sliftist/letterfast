@@ -96,12 +96,6 @@ export class GameConfig extends preact.Component {
         pageURL.value = "game";
     };
 
-    startMultiplayerGame = async (config: { width: number; height: number }) => {
-        this.synced.customWidth = config.width;
-        this.synced.customHeight = config.height;
-        await this.onCreateGame();
-    };
-
     onStartSinglePlayer = async () => {
         await changeGridSize({
             width: this.synced.customWidth,
@@ -110,37 +104,6 @@ export class GameConfig extends preact.Component {
         gameState.gameDuration = this.synced.gameDuration;
         gameState.timeRemaining = this.synced.gameDuration;
         pageURL.value = "game";
-    };
-
-    onCreateGame = async () => {
-        this.synced.creating = true;
-        this.synced.error = undefined;
-
-        try {
-            await changeGridSize({
-                width: this.synced.customWidth,
-                height: this.synced.customHeight,
-            });
-
-            const rpc = getRPCClient();
-            const { gameId } = await rpc.createGame(16);
-            gameState.gameId = gameId;
-            gameState.isMultiplayer = true;
-            gameState.gridWidth = this.synced.customWidth;
-            gameState.gridHeight = this.synced.customHeight;
-            gameState.gameDuration = this.synced.gameDuration;
-            gameState.timeRemaining = this.synced.gameDuration;
-
-            await rpc.updateGameSettings(gameId, this.synced.customWidth, this.synced.customHeight, this.synced.gameDuration);
-
-            joinGameIdURL.value = gameId;
-
-            pageURL.value = "lobby";
-        } catch (error) {
-            this.synced.error = error instanceof Error ? error.message : String(error);
-        } finally {
-            this.synced.creating = false;
-        }
     };
 
     onJoinGame = async () => {
@@ -153,13 +116,10 @@ export class GameConfig extends preact.Component {
         this.synced.error = undefined;
 
         try {
-            const defaults = getSavedConfigOrDefaults();
-            const rpc = getRPCClient();
-            await rpc.joinGame(this.synced.gameIdToJoin.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
             gameState.gameId = this.synced.gameIdToJoin.toUpperCase();
             gameState.isMultiplayer = true;
             joinGameIdURL.value = this.synced.gameIdToJoin.toUpperCase();
-            pageURL.value = "lobby";
+            pageURL.value = "game";
         } catch (error) {
             this.synced.error = error instanceof Error ? error.message : String(error);
         } finally {
@@ -168,12 +128,6 @@ export class GameConfig extends preact.Component {
     };
 
     render() {
-        const multiplayerButtonStyle = css.fontSize(32).pad2(8).hsl(200, 60, 40)
-            .size(60, 60).display("flex").alignItems("center").justifyContent("center").flexShrink0 + "";
-        const multiplayerButtonStyleSmall = css.fontSize(28).pad2(6).hsl(200, 60, 40)
-            .size(50, 50).display("flex").alignItems("center").justifyContent("center").flexShrink0 + "";
-        const emojiStyle = css.relative.top(-6) + "";
-
         return (
             <div className={css.fillBoth.vbox(20)
                 .pad2(40).colorhsl(0, 0, 100)
@@ -184,54 +138,24 @@ export class GameConfig extends preact.Component {
                             Quick Modes
                         </div>
                         <div className={css.vbox(12)}>
-                            <div className={css.hbox(12)}>
-                                <button
-                                    className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={async () => await this.startSinglePlayerGame({ width: 3, height: 3 })}
-                                >
-                                    3x3 Classic Mode
-                                </button>
-                                <button
-                                    className={multiplayerButtonStyle}
-                                    onClick={() => this.startMultiplayerGame({ width: 3, height: 3 })}
-                                    disabled={this.synced.creating}
-                                >
-                                    {this.synced.creating && "..."}
-                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
-                                </button>
-                            </div>
-                            <div className={css.hbox(12)}>
-                                <button
-                                    className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={async () => await this.startSinglePlayerGame({ width: 4, height: 4 })}
-                                >
-                                    4x4 Standard Mode
-                                </button>
-                                <button
-                                    className={multiplayerButtonStyle}
-                                    onClick={() => this.startMultiplayerGame({ width: 4, height: 4 })}
-                                    disabled={this.synced.creating}
-                                >
-                                    {this.synced.creating && "..."}
-                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
-                                </button>
-                            </div>
-                            <div className={css.hbox(12)}>
-                                <button
-                                    className={css.fontSize(20).pad2(16) + ""}
-                                    onClick={async () => await this.startSinglePlayerGame({ width: 5, height: 5 })}
-                                >
-                                    5x5 Extended Mode
-                                </button>
-                                <button
-                                    className={multiplayerButtonStyle}
-                                    onClick={() => this.startMultiplayerGame({ width: 5, height: 5 })}
-                                    disabled={this.synced.creating}
-                                >
-                                    {this.synced.creating && "..."}
-                                    {!this.synced.creating && <span className={emojiStyle}>👥</span>}
-                                </button>
-                            </div>
+                            <button
+                                className={css.fontSize(20).pad2(16) + ""}
+                                onClick={async () => await this.startSinglePlayerGame({ width: 3, height: 3 })}
+                            >
+                                3x3 Classic Mode
+                            </button>
+                            <button
+                                className={css.fontSize(20).pad2(16) + ""}
+                                onClick={async () => await this.startSinglePlayerGame({ width: 4, height: 4 })}
+                            >
+                                4x4 Standard Mode
+                            </button>
+                            <button
+                                className={css.fontSize(20).pad2(16) + ""}
+                                onClick={async () => await this.startSinglePlayerGame({ width: 5, height: 5 })}
+                            >
+                                5x5 Extended Mode
+                            </button>
                         </div>
                     </div>
 
@@ -279,19 +203,6 @@ export class GameConfig extends preact.Component {
                                 }}
                             >
                                 {`Start ${this.synced.customWidth}x${this.synced.customHeight} Game`}
-                            </button>
-                            <button
-                                className={multiplayerButtonStyleSmall}
-                                onClick={async () => {
-                                    if (this.synced.customWidth >= 2 && this.synced.customWidth <= 10
-                                        && this.synced.customHeight >= 2 && this.synced.customHeight <= 10) {
-                                        await this.onCreateGame();
-                                    }
-                                }}
-                                disabled={this.synced.creating}
-                            >
-                                {this.synced.creating && "..."}
-                                {!this.synced.creating && <span className={emojiStyle}>👥</span>}
                             </button>
                         </div>
                     </div>

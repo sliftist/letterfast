@@ -108,6 +108,37 @@ const serverHandlers = {
                 if (gameT.status === "playing" && gameT.startTime) {
                     void player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
                 }
+
+                if (gameT.status === "waiting" && players.length > 1) {
+                    setTimeout(async () => {
+                        const currentGame = GameManager.getGame(sanitized);
+                        if (currentGame && currentGame.status === "waiting") {
+                            await GameManager.startGamePlaying(sanitized);
+                            const updatedGame = GameManager.getGame(sanitized);
+                            if (updatedGame) {
+                                GameManager.broadcastToGame(sanitized, (client) => {
+                                    void client.onGameStart(sanitized, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
+                                });
+
+                                setTimeout(() => {
+                                    const finalGame = GameManager.getGame(sanitized);
+                                    if (finalGame && finalGame.status === "playing") {
+                                        const allWords = GameManager.getAllWords(sanitized);
+                                        const finalPlayers = GameManager.getPlayerScores(sanitized);
+
+                                        GameManager.broadcastToGame(sanitized, (client) => {
+                                            void client.onGameEnd(sanitized, finalPlayers, allWords);
+                                        });
+
+                                        setTimeout(() => {
+                                            GameManager.endGame(sanitized);
+                                        }, 1000);
+                                    }
+                                }, updatedGame.gameDuration);
+                            }
+                        }
+                    }, 1000);
+                }
             });
         }
     },

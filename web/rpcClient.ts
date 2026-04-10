@@ -21,3 +21,11 @@ export function getRPCClient(): ReturnType<typeof getClient> {
 
     return rpcClientInstance;
 }
+
+export function disconnectRPC(): void {
+    rpcClientInstance = undefined;
+}
+
+export function resetRPCClient(): void {
+    rpcClientInstance = undefined;
+}

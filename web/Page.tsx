@@ -4,7 +4,6 @@ import { URLParam } from "sliftutils/render-utils/URLParam";
 import { observer } from "sliftutils/render-utils/observer";
 import { LetterFastGame } from "./LetterFastGame";
 import { GameConfig } from "./GameConfig";
-import { GameLobby } from "./GameLobby";
 import { GridCell } from "./GameState";
 import { NotificationUI } from "./NotificationUI";
 
@@ -60,10 +59,6 @@ export class Page extends preact.Component {
             {
                 key: "game",
                 content: <LetterFastGame />
-            },
-            {
-                key: "lobby",
-                content: <GameLobby />
             },
         ];
 

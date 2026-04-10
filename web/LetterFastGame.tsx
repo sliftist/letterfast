@@ -23,8 +23,9 @@ import {
     GridCell,
     changeGridSize,
 } from "./GameState";
-import { getRPCClient } from "./rpcClient";
+import { getRPCClient, resetRPCClient } from "./rpcClient";
 import { getSavedConfigOrDefaults, saveConfig } from "./GameConfig";
+import { ConnectionManager } from "./ConnectionManager";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
@@ -43,7 +44,8 @@ const WRONG_WORD_TIMEOUT_INCREMENT = 100;
 const MAX_WRONG_WORD_TIMEOUT = 3000;
 const CANCEL_ZONE_SIZE = 80;
 const TIMEOUT_FADEOUT_DURATION = 300;
-const BUTTONS_ROW_HEIGHT_ESTIMATE = 50;
+const BUTTONS_ROW_HEIGHT_ESTIMATE = 100;
+const CONNECTION_STATUS_HEIGHT = 25;
 const MATCHED_WORDS_HEIGHT_PORTRAIT = 150;
 
 function lineIntersectsCell(
@@ -179,7 +181,13 @@ export class LetterFastGame extends preact.Component {
         timeoutMessage: "",
         timeoutFadingOut: false,
         wrongWordCells: [] as { row: number; col: number }[],
+        linkCopied: false,
+        isConverting: false,
+        reconnectCountdown: 0,
     });
+
+    connectionManager: ConnectionManager | undefined;
+    reconnectCountdownInterval: number | undefined;
 
     updateScaling = () => {
         if (isNode()) return;
@@ -197,12 +205,14 @@ export class LetterFastGame extends preact.Component {
         let contentNaturalWidth: number;
         let contentNaturalHeight: number;
 
+        const connectionStatusHeight = gameState.isMultiplayer ? CONNECTION_STATUS_HEIGHT : 0;
+
         if (this.synced.isRotated) {
             contentNaturalWidth = Math.max(gridNaturalWidth, MATCHED_WORDS_WIDTH);
-            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + BUTTONS_ROW_HEIGHT_ESTIMATE + HEADER_GAP + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT + HEADER_GAP + MATCHED_WORDS_HEIGHT_PORTRAIT;
+            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + connectionStatusHeight + (connectionStatusHeight > 0 ? HEADER_GAP : 0) + BUTTONS_ROW_HEIGHT_ESTIMATE + HEADER_GAP + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT + HEADER_GAP + MATCHED_WORDS_HEIGHT_PORTRAIT;
         } else {
             contentNaturalWidth = gridNaturalWidth + GRID_TO_WORDS_GAP + MATCHED_WORDS_WIDTH;
-            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
+            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + connectionStatusHeight + (connectionStatusHeight > 0 ? HEADER_GAP : 0) + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
         }
 
         let availableWidth = window.innerWidth - (viewportMargin * 2);
@@ -255,6 +265,112 @@ export class LetterFastGame extends preact.Component {
             }
         }
     }
+
+    convertToMultiplayer = async () => {
+        if (isNode()) return;
+
+        this.synced.isConverting = true;
+
+        try {
+            const defaults = getSavedConfigOrDefaults();
+            const rpc = getRPCClient();
+
+            this.connectionManager = new ConnectionManager({
+                connect: async () => {
+                    resetRPCClient();
+                    const newRpc = getRPCClient();
+                    const { gameId } = await newRpc.createGame(16);
+                    gameState.gameId = gameId;
+                    gameState.isMultiplayer = true;
+
+                    await newRpc.updateGameSettings(
+                        gameId,
+                        gameState.gridWidth,
+                        gameState.gridHeight,
+                        gameState.gameDuration
+                    );
+
+                    joinGameIdURL.value = gameId;
+
+                    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${gameId}`;
+                    window.history.pushState({}, "", newUrl);
+                },
+                disconnect: () => {
+                    resetRPCClient();
+                },
+                callbacks: {
+                    onStatusChange: (status) => {
+                        gameState.connectionStatus = status;
+                        if (status === "disconnected" || status === "error") {
+                            this.startReconnectCountdown();
+                        } else {
+                            this.stopReconnectCountdown();
+                        }
+                    },
+                }
+            });
+
+            await this.connectionManager.connect();
+        } catch (error) {
+            console.error("Failed to convert to multiplayer:", error);
+        } finally {
+            this.synced.isConverting = false;
+        }
+    };
+
+    leaveMultiplayer = () => {
+        if (this.connectionManager) {
+            this.connectionManager.disconnect();
+            this.connectionManager = undefined;
+        }
+
+        gameState.isMultiplayer = false;
+        gameState.gameId = undefined;
+        gameState.myPlayerIndex = undefined;
+        gameState.players = [];
+        gameState.connectionStatus = "disconnected";
+        joinGameIdURL.value = "";
+
+        const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game`;
+        window.history.pushState({}, "", newUrl);
+    };
+
+    copyShareLink = async () => {
+        if (!gameState.gameId) return;
+
+        try {
+            const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${gameState.gameId}`;
+            await navigator.clipboard.writeText(shareUrl);
+            this.synced.linkCopied = true;
+            setTimeout(() => {
+                this.synced.linkCopied = false;
+            }, 2000);
+        } catch (error) {
+            console.error("Failed to copy link:", error);
+        }
+    };
+
+    startReconnectCountdown = () => {
+        this.stopReconnectCountdown();
+
+        const delay = gameState.connectionStatus === "disconnected" ? 5 : 15;
+        this.synced.reconnectCountdown = delay;
+
+        this.reconnectCountdownInterval = window.setInterval(() => {
+            this.synced.reconnectCountdown--;
+            if (this.synced.reconnectCountdown <= 0) {
+                this.stopReconnectCountdown();
+            }
+        }, 1000);
+    };
+
+    stopReconnectCountdown = () => {
+        if (this.reconnectCountdownInterval !== undefined) {
+            clearInterval(this.reconnectCountdownInterval);
+            this.reconnectCountdownInterval = undefined;
+        }
+        this.synced.reconnectCountdown = 0;
+    };
 
     cancelSelection = () => {
         this.synced.drawing = false;
@@ -314,7 +430,7 @@ export class LetterFastGame extends preact.Component {
         }
 
         const challengeData = challengeURL.value;
-        challengeURL.value = undefined;
+        challengeURL.reset();
         if (challengeData) {
             const gridWidth = challengeData.grid[0]?.length || 0;
             const gridHeight = challengeData.grid.length;
@@ -341,7 +457,7 @@ export class LetterFastGame extends preact.Component {
                 words: challengeData.challengerWords,
                 score: challengeData.challengerScore,
             };
-            
+
             if (challengeData.challengeId && challengeData.signature && challengeData.publicKey) {
                 gameState.challengeMetadata = {
                     challengeId: challengeData.challengeId,
@@ -349,7 +465,7 @@ export class LetterFastGame extends preact.Component {
                     publicKey: challengeData.publicKey,
                 };
             }
-            
+
             gameState.status = "ready";
             gameState.score = 0;
             gameState.matchedWords = [];
@@ -378,13 +494,34 @@ export class LetterFastGame extends preact.Component {
         const joinGameId = joinGameIdURL.value;
         if (joinGameId && !gameState.gameId) {
             try {
-                const { getSavedConfigOrDefaults } = await import("./GameConfig");
-                const defaults = getSavedConfigOrDefaults();
-                const rpc = getRPCClient();
-                await rpc.joinGame(joinGameId.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
                 gameState.gameId = joinGameId.toUpperCase();
                 gameState.isMultiplayer = true;
-                pageURL.value = "lobby";
+
+                const { getSavedConfigOrDefaults } = await import("./GameConfig");
+                const defaults = getSavedConfigOrDefaults();
+
+                this.connectionManager = new ConnectionManager({
+                    connect: async () => {
+                        resetRPCClient();
+                        const rpc = getRPCClient();
+                        await rpc.joinGame(joinGameId.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
+                    },
+                    disconnect: () => {
+                        resetRPCClient();
+                    },
+                    callbacks: {
+                        onStatusChange: (status) => {
+                            gameState.connectionStatus = status;
+                            if (status === "disconnected" || status === "error") {
+                                this.startReconnectCountdown();
+                            } else {
+                                this.stopReconnectCountdown();
+                            }
+                        },
+                    }
+                });
+
+                await this.connectionManager.connect();
             } catch (error) {
                 console.error("Failed to join game:", error);
             }
@@ -393,6 +530,11 @@ export class LetterFastGame extends preact.Component {
 
     componentWillUnmount() {
         cleanup();
+        this.stopReconnectCountdown();
+        if (this.connectionManager) {
+            this.connectionManager.cleanup();
+            this.connectionManager = undefined;
+        }
         if (!isNode()) {
             window.removeEventListener("resize", this.onResize);
             window.removeEventListener("keydown", this.onKeyDown);
@@ -726,17 +868,55 @@ export class LetterFastGame extends preact.Component {
                 </div>
             );
         }
-        if (!gameState.isMultiplayer || gameState.players.length <= 1) return undefined;
+        if (!gameState.isMultiplayer || gameState.players.length === 0) return undefined;
         return (
-            <div className={css.vbox(4)}>
-                {gameState.players
-                    .map((p, index) => ({ p, index }))
-                    .filter(({ index }) => index !== gameState.myPlayerIndex)
-                    .map(({ p, index }) => (
-                        <div key={p.id} className={css.fontSize(14)}>
-                            👤 {p.score}
-                        </div>
-                    ))}
+            <div className={css.vbox(6)}>
+                <div className={css.fontSize(16).fontWeight("bold").colorhsl(0, 0, 100)}>
+                    Players
+                </div>
+                {gameState.players.map((p, index) => (
+                    <div key={p.id} className={css.hbox(6).fontSize(14).colorhsl(0, 0, 100)}>
+                        {index === 0 && <span>👑</span>}
+                        <span>Player {index + 1}: {p.score}</span>
+                        {index === gameState.myPlayerIndex && <span className={css.opacity(0.7)}>(You)</span>}
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
+    renderConnectionStatus() {
+        if (!gameState.isMultiplayer) return undefined;
+
+        const { connectionStatus } = gameState;
+        let statusText = "";
+        let statusColor = "";
+
+        if (connectionStatus === "connected") {
+            statusText = "● Connected";
+            statusColor = css.colorhsl(120, 70, 50) + "";
+        } else if (connectionStatus === "connecting") {
+            statusText = "● Connecting...";
+            statusColor = css.colorhsl(60, 70, 50) + "";
+        } else if (connectionStatus === "disconnected") {
+            if (this.synced.reconnectCountdown > 0) {
+                statusText = `● Reconnecting in ${this.synced.reconnectCountdown}s`;
+            } else {
+                statusText = "● Disconnected";
+            }
+            statusColor = css.colorhsl(0, 70, 50) + "";
+        } else if (connectionStatus === "error") {
+            if (this.synced.reconnectCountdown > 0) {
+                statusText = `● Retrying in ${this.synced.reconnectCountdown}s`;
+            } else {
+                statusText = "● Connection Error";
+            }
+            statusColor = css.colorhsl(0, 70, 50) + "";
+        }
+
+        return (
+            <div className={css.fontSize(14).fontWeight("bold") + statusColor}>
+                {statusText}
             </div>
         );
     }
@@ -775,6 +955,13 @@ export class LetterFastGame extends preact.Component {
                         }}>
                             Settings
                         </button>
+                        <button
+                            onClick={this.convertToMultiplayer}
+                            disabled={this.synced.isConverting}
+                            className={css.hsl(200, 60, 40) + ""}
+                        >
+                            {this.synced.isConverting && "Converting..." || "Convert to Multiplayer"}
+                        </button>
                     </>
                 )}
                 {gameState.isMultiplayer && (
@@ -782,10 +969,17 @@ export class LetterFastGame extends preact.Component {
                         <button onClick={() => this.toggleFullscreen()}>
                             {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
                         </button>
-                        <button onClick={() => {
-                            pageURL.value = "lobby";
-                        }}>
-                            Back to Lobby
+                        <button
+                            onClick={this.copyShareLink}
+                            className={css.hsl(120, 60, 40) + ""}
+                        >
+                            {this.synced.linkCopied && "Copied!" || "Copy Link"}
+                        </button>
+                        <button
+                            onClick={this.leaveMultiplayer}
+                            className={css.hsl(0, 60, 40) + ""}
+                        >
+                            Leave Multiplayer
                         </button>
                     </>
                 )}
@@ -1029,6 +1223,7 @@ export class LetterFastGame extends preact.Component {
                                 {this.renderTimeAndScore(timeBarHue, timePercent)}
                                 {this.renderPlayerScores()}
                             </div>
+                            {this.renderConnectionStatus()}
                             <div className={css.hbox(12).wrap.colorhsl(0, 0, 100)}>
                                 {this.renderButtons()}
                             </div>
@@ -1048,6 +1243,7 @@ export class LetterFastGame extends preact.Component {
                                 </div>
                                 {this.renderPlayerScores()}
                             </div>
+                            {this.renderConnectionStatus()}
                             <div className={css.hbox(20).alignItems("start")}>
                                 <div className={css.vbox(12)}>
                                     {this.renderGrid(totalWidth, totalHeight, gridSize)}
