@@ -3,6 +3,8 @@ import { isNode } from "typesafecss";
 import { getWords } from "./words";
 import { generateGameGrid } from "./GridGenerator";
 import { getSavedConfigOrDefaults } from "./GameConfig";
+import { showGameOver } from "./GameOver";
+
 
 export const CELL_SIZE = 80;
 export const CELL_GAP = 8;
@@ -51,6 +53,20 @@ export interface GameHistory {
     wordsFound: number;
     duration: number;
 }
+
+export type GameOverState =
+    {
+        grid: GridCell[][];
+        playerResults: {
+            id: string;
+            score: number;
+            matchedWords: { word: string; points: number }[];
+            isSelf?: boolean;
+        }[];
+
+        totalPossibleScore: number;
+        totalPossibleWords: number;
+    };
 
 export const LETTER_POINTS: { [key: string]: number } = {
     E: 1, A: 1, I: 1, O: 1, N: 1, R: 1, T: 1, L: 1, S: 1, U: 1,
@@ -161,6 +177,21 @@ export function endGame() {
         wordsFound: gameState.matchedWords.length,
         duration: gameState.gameDuration - gameState.timeRemaining,
     });
+
+    if (!gameState.isMultiplayer && !isNode()) {
+        const gameOverState: GameOverState = {
+            grid: gameState.grid,
+            playerResults: [{
+                id: "player",
+                score: gameState.score,
+                matchedWords: gameState.matchedWords,
+                isSelf: true,
+            }],
+            totalPossibleScore: gameState.totalPossibleScore,
+            totalPossibleWords: gameState.totalPossibleWords,
+        };
+        showGameOver(gameOverState, async () => await startGame());
+    }
 }
 
 export async function changeGridSize(config: { width: number; height: number }) {

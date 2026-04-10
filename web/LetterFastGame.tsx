@@ -2,7 +2,6 @@ import { observable } from "mobx";
 import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
-import { sort } from "socket-function/src/misc";
 import { Anchor } from "sliftutils/render-utils/Anchor";
 import { pageURL, joinGameIdURL } from "./Page";
 import {
@@ -11,7 +10,6 @@ import {
     HIT_SIZE,
     GAME_DURATION,
     gameState,
-    gameHistory,
     startGame,
     endGame,
     getCurrentGridSize,
@@ -854,6 +852,16 @@ export class LetterFastGame extends preact.Component {
                         </div>
                     </div>
                 )}
+                {gameState.status === "finished" && (
+                    <div
+                        title="Click to play again"
+                        className={css.absolute.pos(0, 0).fillBoth
+                            .hbox(0).justifyContent("center")
+                            .borderRadius(8).cursor("pointer")
+                        }
+                        onClick={async () => await startGame()}
+                    />
+                )}
             </div>
         );
     }
@@ -979,62 +987,6 @@ export class LetterFastGame extends preact.Component {
                         </>
                     )}
                 </div>
-                {gameState.status === "finished" && !gameState.isMultiplayer && (
-                    <div
-                        className={css.fixed.pos(0, 0).fillBoth
-                            .hsla(0, 0, 0, 0.85).hbox(0).justifyContent("center")
-                        }
-                        onClick={async () => await startGame()}
-                    >
-                        <div
-                            className={css.vbox(20).pad2(40)
-                                .hsl(240, 40, 20)
-                                .borderRadius(12).marginAuto.colorhsl(0, 0, 100)
-                                .boxShadow("0 10px 50px rgba(0, 0, 0, 0.5)")
-                            }
-                            style={{
-                                border: "3px solid transparent",
-                                backgroundImage: "linear-gradient(#2a1a4a, #2a1a4a), linear-gradient(135deg, #00d4ff, #ff00d4)",
-                                backgroundOrigin: "border-box",
-                                backgroundClip: "padding-box, border-box",
-                            }}
-                        >
-                            <div className={css.fontSize(32)}>Game Over!</div>
-                            <div className={css.vbox(8)}>
-                                <div className={css.fontSize(24)}>
-                                    {gameState.score} Score ({gameState.totalPossibleScore > 0 ? Math.round(gameState.score / gameState.totalPossibleScore * 100) : 0}%) | {gameState.matchedWords.length} Words ({gameState.totalPossibleWords > 0 ? Math.round(gameState.matchedWords.length / gameState.totalPossibleWords * 100) : 0}%)
-                                </div>
-                            </div>
-                            {gameState.matchedWords.length > 0 && (
-                                <div className={css.vbox(6).overflowAuto.maxHeight(300)}>
-                                    <div className={css.fontSize(18)}>Words:</div>
-                                    {sort(gameState.matchedWords.slice(), w => -w.points).map((w, i) => (
-                                        <div key={i} className={css.hbox(12).fontSize(16)}>
-                                            <span>{w.word}</span>
-                                            <span className={css.opacity(0.7)}>
-                                                {w.points} pts
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                            <button onClick={async () => await startGame()}>
-                                Play Again
-                            </button>
-                            {gameHistory.length > 0 && (
-                                <div className={css.vbox(8)}>
-                                    <div className={css.fontSize(20)}>History</div>
-                                    {gameHistory.slice(-5).reverse().map((h, i) => (
-                                        <div key={i} className={css.hbox(12).fontSize(14)}>
-                                            <span>{h.score} pts</span>
-                                            <span>{h.wordsFound} words</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
             </div>
         );
     }

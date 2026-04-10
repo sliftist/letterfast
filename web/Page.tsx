@@ -5,7 +5,6 @@ import { observer } from "sliftutils/render-utils/observer";
 import { LetterFastGame } from "./LetterFastGame";
 import { GameConfig } from "./GameConfig";
 import { GameLobby } from "./GameLobby";
-import { GameResults } from "./GameResults";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
@@ -52,10 +51,6 @@ export class Page extends preact.Component {
             {
                 key: "lobby",
                 content: <GameLobby />
-            },
-            {
-                key: "results",
-                content: <GameResults />
             },
         ];
 

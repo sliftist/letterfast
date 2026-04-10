@@ -26,8 +26,8 @@ async function fetchWordsBrowser(): Promise<string[]> {
 
     const url = "./words.txt.gz";
 
-    const cacheKey = "letterfast_words_cache";
-    const metaKey = "letterfast_words_meta";
+    const cacheKey = "letterfast_words_cache2";
+    const metaKey = "letterfast_words_meta2";
 
     let shouldDownload = true;
     let cachedMeta: CacheMetadata | undefined;

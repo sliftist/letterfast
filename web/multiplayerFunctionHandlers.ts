@@ -1,8 +1,9 @@
 import { createRPC } from "./rpc/createRPC";
-import { GridCell, gameState } from "./GameState";
+import { GridCell, gameState, GameOverState } from "./GameState";
 import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
+import { showGameOver } from "./GameOver";
 
 const MAX_WORDS_PER_PLAYER = 10000;
 
@@ -77,6 +78,7 @@ const serverHandlers = {
 
         if (game) {
             const players = GameManager.getPlayerScores(sanitized);
+            let gameT = game;
             // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
             setImmediate(() => {
                 GameManager.broadcastToGame(sanitized, (playerClient, playerIndex) => {
@@ -85,8 +87,8 @@ const serverHandlers = {
                 });
 
 
-                if (game.status === "playing" && game.startTime) {
-                    void player.onGameStart(sanitized, game.grid, game.startTime, game.gameDuration, game.totalPossibleWords, game.totalPossibleScore);
+                if (gameT.status === "playing" && gameT.startTime) {
+                    void player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
                 }
             });
         }
@@ -228,7 +230,21 @@ export const clientHandlers = {
                 gameState.matchedWordsSet.add(wordData.word);
             }
         }
-        pageURL.value = "lobby";
+
+        const gameOverState: GameOverState = {
+            grid: gameState.grid,
+            playerResults: players.map(player => ({
+                id: player.id,
+                score: player.score,
+                matchedWords: allWords[player.id] || [],
+                isSelf: player.id === myPlayerId,
+            })),
+            totalPossibleScore: gameState.totalPossibleScore,
+            totalPossibleWords: gameState.totalPossibleWords,
+        };
+        showGameOver(gameOverState, () => {
+            pageURL.value = "lobby";
+        });
     },
 
     async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number): Promise<void> {

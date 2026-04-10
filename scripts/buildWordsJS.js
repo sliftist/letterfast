@@ -13,6 +13,29 @@ const rawData = fs.readFileSync(inputPath, "utf8");
 const words = rawData.split("\n").map(w => w.trim()).filter(w => w.length > 0);
 console.log(`Loaded ${words.length.toLocaleString()} words`);
 
+console.log("Loading frequency order...");
+const frequencyOrderPath = path.resolve(__dirname, "../words_ordered.txt");
+const frequencyData = fs.readFileSync(frequencyOrderPath, "utf8");
+const frequencyOrder = frequencyData.split("\n").map(w => w.trim()).filter(w => w.length > 0);
+const frequencyIndex = new Map(frequencyOrder.map((word, index) => [word, index]));
+console.log(`Loaded ${frequencyIndex.size.toLocaleString()} words from frequency list`);
+
+console.log("Sorting words by frequency...");
+words.sort((a, b) => {
+    const indexA = frequencyIndex.get(a);
+    const indexB = frequencyIndex.get(b);
+    
+    if (indexA !== undefined && indexB !== undefined) {
+        return indexA - indexB;
+    }
+    if (indexA !== undefined) return -1;
+    if (indexB !== undefined) return 1;
+    return a.localeCompare(b);
+});
+const wordsInFrequencyList = words.filter(w => frequencyIndex.has(w)).length;
+console.log(`Sorted ${wordsInFrequencyList.toLocaleString()} words by frequency`);
+console.log(`Placed ${(words.length - wordsInFrequencyList).toLocaleString()} remaining words at end (alphabetically)`);
+
 const wordsJson = JSON.stringify(words);
 const compressed = zlib.gzipSync(Buffer.from(wordsJson, "utf8"));
 const base64 = compressed.toString("base64");

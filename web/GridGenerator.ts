@@ -14,7 +14,7 @@ class TrieNode {
     isWord: boolean = false;
 }
 
-class Trie {
+export class Trie {
     root: TrieNode = new TrieNode();
 
     insert(word: string) {
@@ -55,7 +55,7 @@ let wordSet: Set<string> | undefined;
 let wordTrie: Trie | undefined;
 let wordSetPromise: Promise<void> | undefined;
 
-async function loadWordData(): Promise<void> {
+export async function loadWordData(): Promise<void> {
     if (wordSet && wordTrie) return;
     if (wordSetPromise) return wordSetPromise;
 
@@ -70,7 +70,15 @@ async function loadWordData(): Promise<void> {
     return wordSetPromise;
 }
 
-function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
+export async function getWordTrie(): Promise<Trie> {
+    await loadWordData();
+    if (!wordTrie) {
+        throw new Error("Failed to load word trie");
+    }
+    return wordTrie;
+}
+
+export function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
     let foundWords = new Set<string>();
     let wordPaths = new Map<string, Set<string>>();
     let height = grid.length;
@@ -315,7 +323,7 @@ export interface GridMetadata {
     cellToWords: Map<string, Set<string>>;
 }
 
-function findWordPathInGrid(grid: GridCell[][], word: string): { row: number; col: number }[] | undefined {
+export function findWordPathInGrid(grid: GridCell[][], word: string): { row: number; col: number }[] | undefined {
     let height = grid.length;
     let width = grid[0].length;
 
