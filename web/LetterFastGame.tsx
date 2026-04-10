@@ -341,6 +341,15 @@ export class LetterFastGame extends preact.Component {
                 words: challengeData.challengerWords,
                 score: challengeData.challengerScore,
             };
+            
+            if (challengeData.challengeId && challengeData.signature && challengeData.publicKey) {
+                gameState.challengeMetadata = {
+                    challengeId: challengeData.challengeId,
+                    signature: challengeData.signature,
+                    publicKey: challengeData.publicKey,
+                };
+            }
+            
             gameState.status = "ready";
             gameState.score = 0;
             gameState.matchedWords = [];

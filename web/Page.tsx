@@ -6,6 +6,7 @@ import { LetterFastGame } from "./LetterFastGame";
 import { GameConfig } from "./GameConfig";
 import { GameLobby } from "./GameLobby";
 import { GridCell } from "./GameState";
+import { NotificationUI } from "./NotificationUI";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
@@ -16,6 +17,9 @@ export const challengeURL = new URLParam<{
     totalPossibleWords: number;
     totalPossibleScore: number;
     gameDuration: number;
+    challengeId?: string;
+    signature?: string;
+    publicKey?: string;
 } | undefined>("challenge", undefined);
 
 @observer
@@ -70,6 +74,7 @@ export class Page extends preact.Component {
                 .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
                 .overflowAuto
             }>
+                <NotificationUI />
                 {page.content}
             </div>
         );

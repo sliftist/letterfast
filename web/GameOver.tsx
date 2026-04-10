@@ -9,6 +9,8 @@ import { observable } from "mobx";
 import { analyzeWords, WordAnalysisResult } from "./WordAnalysis";
 import { challengeURL } from "./Page";
 import { isNode } from "typesafecss";
+import { signPayload, getPublicKey } from "./CryptoIdentity";
+import { getRPCClient } from "./rpcClient";
 
 interface GameOverProps {
     state: GameOverState;
@@ -213,6 +215,10 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     {selfPlayer && !isNode() && (
                         <button onClick={async () => {
                             const { gameState } = await import("./GameState");
+                            const challengeId = crypto.randomUUID();
+                            const publicKey = await getPublicKey();
+                            const signature = await signPayload({ challengeId });
+                            
                             challengeURL.value = {
                                 grid: state.grid,
                                 challengerWords: selfPlayer.matchedWords,
@@ -220,6 +226,9 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 totalPossibleWords: state.totalPossibleWords,
                                 totalPossibleScore: state.totalPossibleScore,
                                 gameDuration: gameState.gameDuration,
+                                challengeId,
+                                signature,
+                                publicKey,
                             };
                             const url = window.location.origin + window.location.pathname + window.location.search;
                             await navigator.clipboard.writeText(url);
@@ -227,6 +236,22 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             setTimeout(() => {
                                 this.synced.challengeLinkCopied = false;
                             }, 2000);
+
+                            try {
+                                const rpc = getRPCClient();
+                                await rpc.watchChallenge(
+                                    challengeId,
+                                    signature,
+                                    publicKey,
+                                    selfPlayer.score,
+                                    selfPlayer.matchedWords,
+                                    state.grid,
+                                    state.totalPossibleScore,
+                                    state.totalPossibleWords
+                                );
+                            } catch (error) {
+                                console.error("Failed to watch challenge:", error);
+                            }
                         }}>
                             {this.synced.challengeLinkCopied && "Copied!" || "Challenge a Friend"}
                         </button>

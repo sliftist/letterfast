@@ -1,34 +1,21 @@
 
-Online challenge mode
-    - Add a file that can generate a user private key (storing it in localStorage), and sign requests and give it's public key
-    - Sign a random payload and add it to the challenge url. It should have the user's public key
-    - Tell the server we want to watch this payload, proving we are the owner of it (I guess sign a second part with the same signature)
-        - This should cause us to watch if anyone finishes the challenge
-    - On finishing a challenge, tell the server we finished it, providing the signed random payload
-        - The server should then tell the watcher they have finished, sending the other player's results
-        - Only allow finishing it up to 3 times, then disallow it. Because the payload has a random value, and is signed, it can't be forged, and is unique, so we know to stop allowing that specific random id to be broadcast too many times.
-    - Add a notification system, which has a notification count at the top right, which can be clicked on to show the list of notifications, with the text showing a short summary (how many points the other person got vs us)
-        - Of course make this generic, the system shouldn't be hardcoding challenge information, it should handle any notifications
-        - On clicking on this notification show the game over screen to show the game details
 
-
-Remove multiplayer screen, so there is only the setup game page, and play page.
-    - Autostart
+Remove multiplayer screen, so there is only the setup game page, and play page (and get rid of links on setup page which start a multiplayer game).
+    - On play page add a button which converts the current game to multiplayer
+    - When in multiplayer mode connect to the server, show the server status, and auto reconnect after 5 seconds if we disconnect (and retry every 15 seconds on connection failure).
+    - Autostart when in multiplayer mode and we have > 1 players
     - Allow converting to multiplayer at any time
         - button to copy link, which is just the current url
     - Show connection status
     - Make it easy to go back to single player
 
 
+Setting to allow showing how many words per letter are left
+
+Verify mobile works well
+
 
 Have a mode where a lot of tiles are multiple letters based on how they phonetically sound
-
-Organize multiplayer page, making it more clear how to share when you are in the lobby, AND add a share link while in the game.
-    - Can we support sharing to a messaging app?
-
-
-Fix the single player game over screen on mobile
-    - Make a universal game over screen that can show the score anywhere we need it (multiplayer, etc), and have this show as a page instead of some kind of weird pop-up. 
 
 
 Show endpoint errors in the client, automatically reconnect to the server, and show when we are disconnected.

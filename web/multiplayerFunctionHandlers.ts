@@ -4,8 +4,26 @@ import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
 import { showGameOver } from "./GameOver";
+import { verifySignature } from "./CryptoIdentity";
+import { addNotification } from "./NotificationState";
 
 const MAX_WORDS_PER_PLAYER = 10000;
+const MAX_CHALLENGE_COMPLETIONS = 3;
+const CHALLENGE_EXPIRY_TIME = 24 * 60 * 60 * 1000;
+
+interface ChallengeWatcher {
+    publicKey: string;
+    client: AllHandlers;
+    completionCount: number;
+    createdAt: number;
+    creatorScore: number;
+    creatorWords: { word: string; points: number }[];
+    grid: GridCell[][];
+    totalPossibleScore: number;
+    totalPossibleWords: number;
+}
+
+const challengeWatchers = new Map<string, ChallengeWatcher>();
 
 function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentifier): void {
     onLastCallerDisconnect(() => {
@@ -174,6 +192,65 @@ const serverHandlers = {
 
     async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number }> {
         return GameManager.getGameSettings(gameId);
+    },
+
+    async watchChallenge(challengeId: string, signature: string, publicKey: string, creatorScore: number, creatorWords: { word: string; points: number }[], grid: GridCell[][], totalPossibleScore: number, totalPossibleWords: number): Promise<void> {
+        const player = getServerSideClient();
+        if (!player) {
+            throw new Error(`No active caller`);
+        }
+
+        const payload = { challengeId };
+        const isValid = await verifySignature(payload, signature, publicKey);
+        if (!isValid) {
+            throw new Error(`Invalid signature for challenge ${challengeId}`);
+        }
+
+        challengeWatchers.set(challengeId, {
+            publicKey,
+            client: player,
+            completionCount: 0,
+            createdAt: Date.now(),
+            creatorScore,
+            creatorWords,
+            grid,
+            totalPossibleScore,
+            totalPossibleWords,
+        });
+
+        onLastCallerDisconnect(() => {
+            challengeWatchers.delete(challengeId);
+        });
+    },
+
+    async submitChallengeCompletion(challengeId: string, signature: string, publicKey: string, playerScore: number, playerWords: { word: string; points: number }[]): Promise<void> {
+        const payload = { challengeId };
+        const isValid = await verifySignature(payload, signature, publicKey);
+        if (!isValid) {
+            throw new Error(`Invalid signature for challenge ${challengeId}`);
+        }
+
+        const watcher = challengeWatchers.get(challengeId);
+        if (!watcher) {
+            return;
+        }
+
+        if (watcher.completionCount >= MAX_CHALLENGE_COMPLETIONS) {
+            return;
+        }
+
+        watcher.completionCount++;
+
+        void watcher.client.onChallengeCompleted(
+            challengeId,
+            playerScore,
+            playerWords,
+            watcher.grid,
+            watcher.totalPossibleScore,
+            watcher.totalPossibleWords,
+            watcher.creatorScore,
+            watcher.creatorWords
+        );
     }
 };
 
@@ -252,6 +329,24 @@ export const clientHandlers = {
         gameState.gridWidth = gridWidth;
         gameState.gridHeight = gridHeight;
         gameState.gameDuration = gameDuration;
+    },
+
+    async onChallengeCompleted(challengeId: string, playerScore: number, playerWords: { word: string; points: number }[], grid: GridCell[][], totalPossibleScore: number, totalPossibleWords: number, creatorScore: number, creatorWords: { word: string; points: number }[]): Promise<void> {
+        const summary = `Scored ${playerScore} vs your ${creatorScore}`;
+        addNotification({
+            type: "challenge-completed",
+            summary,
+            data: {
+                challengeId,
+                grid,
+                playerScore,
+                creatorScore,
+                playerWords,
+                creatorWords,
+                totalPossibleScore,
+                totalPossibleWords,
+            },
+        });
     }
 };
 
@@ -268,6 +363,9 @@ const clientHandlersNoOp: ClientHandlers = {
     },
 
     async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number): Promise<void> {
+    },
+
+    async onChallengeCompleted(challengeId: string, playerScore: number, playerWords: { word: string; points: number }[], grid: GridCell[][], totalPossibleScore: number, totalPossibleWords: number, creatorScore: number, creatorWords: { word: string; points: number }[]): Promise<void> {
     }
 };
 
@@ -283,3 +381,14 @@ export type AllHandlers = typeof allHandlers;
 export const { startServer, getClient, getServerSideClient } = createRPC(allHandlers);
 
 GameManager.startCleanupInterval();
+
+function cleanupExpiredChallenges(): void {
+    const now = Date.now();
+    for (const [challengeId, watcher] of challengeWatchers.entries()) {
+        if (now - watcher.createdAt > CHALLENGE_EXPIRY_TIME) {
+            challengeWatchers.delete(challengeId);
+        }
+    }
+}
+
+setInterval(cleanupExpiredChallenges, 60 * 60 * 1000);

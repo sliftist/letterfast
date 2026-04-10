@@ -50,6 +50,11 @@ export interface GameState {
         words: { word: string; points: number }[];
         score: number;
     };
+    challengeMetadata?: {
+        challengeId: string;
+        signature: string;
+        publicKey: string;
+    };
 }
 
 export interface GameHistory {
@@ -141,6 +146,7 @@ export const gameState = observable<GameState>({
     cellToWords: new Map<string, Set<string>>(),
     isChallengeMode: false,
     challengerData: undefined,
+    challengeMetadata: undefined,
 });
 
 void generateGrid().then(grid => {
@@ -173,12 +179,12 @@ export async function startGame(regenerateGrid = true, duration?: number) {
         if (gameState.status !== "playing") return;
         gameState.timeRemaining = Math.max(0, gameState.gameDuration - (Date.now() - startTime));
         if (gameState.timeRemaining === 0) {
-            endGame();
+            void endGame();
         }
     }, 100);
 }
 
-export function endGame() {
+export async function endGame() {
     if (timerInterval) clearInterval(timerInterval);
     timerInterval = undefined;
     gameState.status = "finished";
@@ -188,6 +194,22 @@ export function endGame() {
         wordsFound: gameState.matchedWords.length,
         duration: gameState.gameDuration - gameState.timeRemaining,
     });
+
+    if (gameState.isChallengeMode && gameState.challengeMetadata && !isNode()) {
+        try {
+            const { getRPCClient } = await import("./rpcClient");
+            const rpc = getRPCClient();
+            await rpc.submitChallengeCompletion(
+                gameState.challengeMetadata.challengeId,
+                gameState.challengeMetadata.signature,
+                gameState.challengeMetadata.publicKey,
+                gameState.score,
+                gameState.matchedWords
+            );
+        } catch (error) {
+            console.error("Failed to submit challenge completion:", error);
+        }
+    }
 
     if (!gameState.isMultiplayer && !isNode()) {
         let playerResults: GameOverState["playerResults"];
