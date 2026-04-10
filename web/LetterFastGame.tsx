@@ -3,7 +3,7 @@ import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { pageURL, joinGameIdURL } from "./Page";
+import { pageURL, joinGameIdURL, challengeURL } from "./Page";
 import {
     CELL_SIZE,
     CELL_GAP,
@@ -311,6 +311,59 @@ export class LetterFastGame extends preact.Component {
             document.addEventListener("touchmove", this.preventGlobalTouchMove, { passive: false });
             document.addEventListener("fullscreenchange", this.onFullscreenChange);
             this.synced.isFullscreen = !!document.fullscreenElement;
+        }
+
+        const challengeData = challengeURL.value;
+        challengeURL.value = undefined;
+        if (challengeData) {
+            const gridWidth = challengeData.grid[0]?.length || 0;
+            const gridHeight = challengeData.grid.length;
+
+            if (gridWidth < 2 || gridWidth > 10 || gridHeight < 2 || gridHeight > 10) {
+                console.error(`Invalid challenge grid size: ${gridWidth}x${gridHeight}. Must be between 2x2 and 10x10`);
+                return;
+            }
+
+            if (!challengeData.grid.every(row => row.length === gridWidth)) {
+                console.error(`Invalid challenge grid: inconsistent row lengths`);
+                return;
+            }
+
+            gameState.isMultiplayer = false;
+            gameState.isChallengeMode = true;
+            gameState.grid = challengeData.grid;
+            gameState.gridWidth = gridWidth;
+            gameState.gridHeight = gridHeight;
+            gameState.totalPossibleWords = challengeData.totalPossibleWords;
+            gameState.totalPossibleScore = challengeData.totalPossibleScore;
+            gameState.gameDuration = challengeData.gameDuration;
+            gameState.challengerData = {
+                words: challengeData.challengerWords,
+                score: challengeData.challengerScore,
+            };
+            gameState.status = "ready";
+            gameState.score = 0;
+            gameState.matchedWords = [];
+            gameState.matchedWordsSet.clear();
+            gameState.timeRemaining = challengeData.gameDuration;
+
+            const { getWordTrie, findAllWordsInGrid } = await import("./GridGenerator");
+            const trie = await getWordTrie();
+            const result = findAllWordsInGrid(challengeData.grid, trie);
+            const cellToWords = new Map<string, Set<string>>();
+            for (let [word, cells] of result.wordPaths) {
+                let upperWord = word.toUpperCase();
+                for (let cellKey of cells) {
+                    let wordsSet = cellToWords.get(cellKey);
+                    if (!wordsSet) {
+                        wordsSet = new Set<string>();
+                        cellToWords.set(cellKey, wordsSet);
+                    }
+                    wordsSet.add(upperWord);
+                }
+            }
+            gameState.cellToWords = cellToWords;
+            return;
         }
 
         const joinGameId = joinGameIdURL.value;
@@ -655,6 +708,15 @@ export class LetterFastGame extends preact.Component {
     }
 
     renderPlayerScores() {
+        if (gameState.isChallengeMode && gameState.challengerData) {
+            return (
+                <div className={css.vbox(4)}>
+                    <div className={css.fontSize(14).colorhsl(0, 0, 100)}>
+                        Challenger: {gameState.challengerData.score}
+                    </div>
+                </div>
+            );
+        }
         if (!gameState.isMultiplayer || gameState.players.length <= 1) return undefined;
         return (
             <div className={css.vbox(4)}>

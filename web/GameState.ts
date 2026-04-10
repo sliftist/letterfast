@@ -45,6 +45,11 @@ export interface GameState {
     totalPossibleWords: number;
     totalPossibleScore: number;
     cellToWords: Map<string, Set<string>>;
+    isChallengeMode: boolean;
+    challengerData?: {
+        words: { word: string; points: number }[];
+        score: number;
+    };
 }
 
 export interface GameHistory {
@@ -134,10 +139,14 @@ export const gameState = observable<GameState>({
     totalPossibleWords: 0,
     totalPossibleScore: 0,
     cellToWords: new Map<string, Set<string>>(),
+    isChallengeMode: false,
+    challengerData: undefined,
 });
 
 void generateGrid().then(grid => {
-    gameState.grid = grid;
+    if (!gameState.isChallengeMode) {
+        gameState.grid = grid;
+    }
 });
 
 let timerInterval: number | undefined;
@@ -149,6 +158,8 @@ export async function startGame(regenerateGrid = true, duration?: number) {
     }
     if (regenerateGrid) {
         gameState.grid = await generateGrid();
+        gameState.isChallengeMode = false;
+        gameState.challengerData = undefined;
     }
     gameState.timeRemaining = gameState.gameDuration;
     gameState.score = 0;
@@ -179,14 +190,35 @@ export function endGame() {
     });
 
     if (!gameState.isMultiplayer && !isNode()) {
-        const gameOverState: GameOverState = {
-            grid: gameState.grid,
-            playerResults: [{
+        let playerResults: GameOverState["playerResults"];
+        
+        if (gameState.isChallengeMode && gameState.challengerData) {
+            playerResults = [
+                {
+                    id: "challenger",
+                    score: gameState.challengerData.score,
+                    matchedWords: gameState.challengerData.words,
+                    isSelf: false,
+                },
+                {
+                    id: "player",
+                    score: gameState.score,
+                    matchedWords: gameState.matchedWords,
+                    isSelf: true,
+                }
+            ];
+        } else {
+            playerResults = [{
                 id: "player",
                 score: gameState.score,
                 matchedWords: gameState.matchedWords,
                 isSelf: true,
-            }],
+            }];
+        }
+
+        const gameOverState: GameOverState = {
+            grid: gameState.grid,
+            playerResults,
             totalPossibleScore: gameState.totalPossibleScore,
             totalPossibleWords: gameState.totalPossibleWords,
         };

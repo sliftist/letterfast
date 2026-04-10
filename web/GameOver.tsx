@@ -7,6 +7,8 @@ import { showFullscreenModal } from "sliftutils/render-utils/FullscreenModal";
 import { closeAllModals } from "sliftutils/render-utils/modal";
 import { observable } from "mobx";
 import { analyzeWords, WordAnalysisResult } from "./WordAnalysis";
+import { challengeURL } from "./Page";
+import { isNode } from "typesafecss";
 
 interface GameOverProps {
     state: GameOverState;
@@ -18,6 +20,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
     synced = observable({
         analysis: undefined as WordAnalysisResult | undefined,
         isLoading: true,
+        challengeLinkCopied: false,
     });
 
     async componentDidMount() {
@@ -39,6 +42,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         const sortedPlayers = sort(state.playerResults.slice(), p => -p.score);
         const winner = sortedPlayers[0];
         const isSinglePlayer = state.playerResults.length === 1;
+        const isChallengeMode = state.playerResults.length === 2 && state.playerResults.some(p => p.id === "challenger");
         const selfPlayer = state.playerResults.find(p => p.isSelf);
 
         return (
@@ -68,7 +72,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     {!isSinglePlayer && winner && (
                         <div className={css.vbox(8).textAlign("center")}>
                             <div className={css.fontSize(24)}>
-                                Winner: Player {state.playerResults.findIndex(p => p.id === winner.id) + 1}
+                                Winner: {winner.isSelf ? "You" : winner.id === "challenger" ? "Challenger" : `Player ${state.playerResults.findIndex(p => p.id === winner.id) + 1}`}
                             </div>
                             <div className={css.fontSize(20).opacity(0.7)}>
                                 {winner.score} Score ({state.totalPossibleScore > 0 ? Math.round(winner.score / state.totalPossibleScore * 100) : 0}%)
@@ -108,11 +112,8 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                     <div className={css.hbox(12).alignItems("center")}>
                                         {!isSinglePlayer && (
                                             <div className={css.fontSize(20).fontWeight("bold")}>
-                                                #{index + 1} Player {playerIndex + 1}
+                                                #{index + 1} {isMe ? "You" : player.id === "challenger" ? "Challenger" : `Player ${playerIndex + 1}`}
                                             </div>
-                                        )}
-                                        {isMe && !isSinglePlayer && (
-                                            <span className={css.opacity(0.7)}>(You)</span>
                                         )}
                                         {!isSinglePlayer && (
                                             <div className={css.fontSize(18).fontWeight("bold").marginLeft("auto")}>
@@ -202,11 +203,34 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     </div>
 
                     <button onClick={() => {
+                        challengeURL.value = undefined;
                         closeAllModals();
                         onPlayAgain();
                     }}>
                         Play Again
                     </button>
+
+                    {selfPlayer && !isNode() && (
+                        <button onClick={async () => {
+                            const { gameState } = await import("./GameState");
+                            challengeURL.value = {
+                                grid: state.grid,
+                                challengerWords: selfPlayer.matchedWords,
+                                challengerScore: selfPlayer.score,
+                                totalPossibleWords: state.totalPossibleWords,
+                                totalPossibleScore: state.totalPossibleScore,
+                                gameDuration: gameState.gameDuration,
+                            };
+                            const url = window.location.origin + window.location.pathname + window.location.search;
+                            await navigator.clipboard.writeText(url);
+                            this.synced.challengeLinkCopied = true;
+                            setTimeout(() => {
+                                this.synced.challengeLinkCopied = false;
+                            }, 2000);
+                        }}>
+                            {this.synced.challengeLinkCopied && "Copied!" || "Challenge a Friend"}
+                        </button>
+                    )}
 
                     {isSinglePlayer && gameHistory.length > 0 && (
                         <div className={css.vbox(8)}>

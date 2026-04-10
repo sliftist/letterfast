@@ -5,9 +5,18 @@ import { observer } from "sliftutils/render-utils/observer";
 import { LetterFastGame } from "./LetterFastGame";
 import { GameConfig } from "./GameConfig";
 import { GameLobby } from "./GameLobby";
+import { GridCell } from "./GameState";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
+export const challengeURL = new URLParam<{
+    grid: GridCell[][];
+    challengerWords: { word: string; points: number }[];
+    challengerScore: number;
+    totalPossibleWords: number;
+    totalPossibleScore: number;
+    gameDuration: number;
+} | undefined>("challenge", undefined);
 
 @observer
 export class Page extends preact.Component {
