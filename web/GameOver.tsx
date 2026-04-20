@@ -3,14 +3,72 @@ import { observer } from "sliftutils/render-utils/observer";
 import { css } from "typesafecss";
 import { GameOverState, gameHistory } from "./GameState";
 import { sort } from "socket-function/src/misc";
-import { showFullscreenModal } from "sliftutils/render-utils/FullscreenModal";
-import { closeAllModals } from "sliftutils/render-utils/modal";
 import { observable } from "mobx";
 import { analyzeWords, WordAnalysisResult } from "./WordAnalysis";
 import { challengeURL } from "./Page";
 import { isNode } from "typesafecss";
 import { signPayload, getPublicKey } from "./CryptoIdentity";
 import { getRPCClient } from "./rpcClient";
+import { render } from "preact";
+
+let modalRoot: HTMLDivElement | undefined;
+let modalContainer: HTMLDivElement | undefined;
+
+function showFullscreenModal(config: { contents: preact.VNode }) {
+    if (!modalRoot) {
+        modalRoot = document.createElement("div");
+        modalRoot.id = "fullscreen-modal-root";
+        document.body.appendChild(modalRoot);
+    }
+
+    if (modalContainer) {
+        modalContainer.remove();
+    }
+
+    modalContainer = document.createElement("div");
+    modalContainer.className = css.fixed.pos(0, 0).fillBoth
+        .hsla(0, 0, 0, 0.8)
+        .zIndex(10000)
+        .overflowAuto + "";
+
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    const originalOverflow = document.body.style.overflow;
+    const originalPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+        document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+        if (e.target === modalContainer) {
+            e.preventDefault();
+        }
+    };
+
+    modalContainer.addEventListener("touchmove", handleTouchMove, { passive: false });
+
+    modalRoot.appendChild(modalContainer);
+    render(config.contents, modalContainer);
+
+    return () => {
+        if (modalContainer) {
+            modalContainer.removeEventListener("touchmove", handleTouchMove);
+            modalContainer.remove();
+            modalContainer = undefined;
+        }
+        document.body.style.overflow = originalOverflow;
+        document.body.style.paddingRight = originalPaddingRight;
+    };
+}
+
+function closeAllModals() {
+    if (modalContainer) {
+        modalContainer.remove();
+        modalContainer = undefined;
+    }
+    document.body.style.overflow = "";
+    document.body.style.paddingRight = "";
+}
 
 interface GameOverProps {
     state: GameOverState;
@@ -23,9 +81,18 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         analysis: undefined as WordAnalysisResult | undefined,
         isLoading: true,
         challengeLinkCopied: false,
+        challengeLinkCopyFailed: false,
+        isMobile: false,
     });
 
+    updateMobileState = () => {
+        this.synced.isMobile = window.innerWidth <= 600;
+    };
+
     async componentDidMount() {
+        this.updateMobileState();
+        window.addEventListener("resize", this.updateMobileState);
+
         const selfPlayer = this.props.state.playerResults.find(p => p.isSelf);
         if (selfPlayer) {
             const analysis = await analyzeWords({
@@ -39,6 +106,43 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         }
     }
 
+    componentWillUnmount() {
+        window.removeEventListener("resize", this.updateMobileState);
+    }
+
+    copyToClipboard = async (text: string): Promise<boolean> => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (error) {
+            console.warn("navigator.clipboard.writeText failed:", error);
+        }
+
+        try {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            textArea.style.top = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+
+            const successful = document.execCommand("copy");
+            textArea.remove();
+
+            if (successful) {
+                return true;
+            }
+        } catch (error) {
+            console.warn("execCommand copy failed:", error);
+        }
+
+        return false;
+    };
+
     render() {
         const { state, onPlayAgain } = this.props;
         const sortedPlayers = sort(state.playerResults.slice(), p => -p.score);
@@ -47,17 +151,21 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         const isChallengeMode = state.playerResults.length === 2 && state.playerResults.some(p => p.id === "challenger");
         const selfPlayer = state.playerResults.find(p => p.isSelf);
 
+        const outerPadding = this.synced.isMobile ? 0 : 40;
+        const innerPadding = this.synced.isMobile ? 20 : 40;
+        const borderRadius = this.synced.isMobile ? 0 : 12;
+
         return (
             <div className={css.fillBoth.vbox(20)
-                .pad2(40)
+                .pad2(outerPadding)
                 .colorhsl(0, 0, 100)
                 .overflowAuto
                 .hbox(0).justifyContent("center")
             }>
                 <div
-                    className={css.vbox(20).pad2(40)
+                    className={css.vbox(20).pad2(innerPadding)
                         .hsl(240, 40, 20)
-                        .borderRadius(12).colorhsl(0, 0, 100)
+                        .borderRadius(borderRadius).colorhsl(0, 0, 100)
                         .boxShadow("0 10px 50px rgba(0, 0, 0, 0.5)")
                     }
                     style={{
@@ -231,11 +339,22 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 publicKey,
                             };
                             const url = window.location.origin + window.location.pathname + window.location.search;
-                            await navigator.clipboard.writeText(url);
-                            this.synced.challengeLinkCopied = true;
-                            setTimeout(() => {
+
+                            const copySuccess = await this.copyToClipboard(url);
+
+                            if (copySuccess) {
+                                this.synced.challengeLinkCopied = true;
+                                this.synced.challengeLinkCopyFailed = false;
+                                setTimeout(() => {
+                                    this.synced.challengeLinkCopied = false;
+                                }, 2000);
+                            } else {
                                 this.synced.challengeLinkCopied = false;
-                            }, 2000);
+                                this.synced.challengeLinkCopyFailed = true;
+                                setTimeout(() => {
+                                    this.synced.challengeLinkCopyFailed = false;
+                                }, 3000);
+                            }
 
                             try {
                                 const rpc = getRPCClient();
@@ -253,7 +372,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 console.error("Failed to watch challenge:", error);
                             }
                         }}>
-                            {this.synced.challengeLinkCopied && "Copied!" || "Challenge a Friend"}
+                            {this.synced.challengeLinkCopied && "Copied!" || this.synced.challengeLinkCopyFailed && "Copy Failed" || "Challenge a Friend"}
                         </button>
                     )}
 

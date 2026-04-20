@@ -29,14 +29,7 @@ import { ConnectionManager } from "./ConnectionManager";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
-const VIEWPORT_MARGIN_BASE = 20;
-const VIEWPORT_MARGIN_REFERENCE_SIZE = 1000;
-const PORTRAIT_ROTATION_THRESHOLD = 0.75;
-const OUTER_PADDING = 20;
-const MATCHED_WORDS_WIDTH = 250;
 const GRID_TO_WORDS_GAP = 20;
-const HEADER_GAP = 20;
-const HEADER_HEIGHT_ESTIMATE = 50;
 const CURRENT_WORD_HEIGHT = 32;
 const BELOW_GRID_GAP = 12;
 const WRONG_WORD_BASE_TIMEOUT = 1000;
@@ -44,10 +37,10 @@ const WRONG_WORD_TIMEOUT_INCREMENT = 100;
 const MAX_WRONG_WORD_TIMEOUT = 3000;
 const CANCEL_ZONE_SIZE = 80;
 const TIMEOUT_FADEOUT_DURATION = 300;
-const BUTTONS_ROW_HEIGHT_ESTIMATE = 100;
-const CONNECTION_STATUS_HEIGHT = 25;
-const MATCHED_WORDS_HEIGHT_PORTRAIT = 150;
 
+const MARGIN_EMPTY_SIDE = 20;
+const MIN_SPACE_CONTENT_AXIS_NORMAL = 500;
+const MIN_SPACE_CONTENT_AXIS_PORTRAIT = 200;
 function lineIntersectsCell(
     lineStart: { x: number; y: number },
     lineEnd: { x: number; y: number },
@@ -172,6 +165,9 @@ export class LetterFastGame extends preact.Component {
         pulseCells: [] as { row: number; col: number }[],
         floatingScores: [] as FloatingScore[],
         scale: 1,
+        totalWidth: 0,
+        totalHeight: 0,
+        // default is portrait
         isRotated: false,
         debugPositions: [] as { x: number; y: number }[],
         isFullscreen: false,
@@ -188,47 +184,6 @@ export class LetterFastGame extends preact.Component {
 
     connectionManager: ConnectionManager | undefined;
     reconnectCountdownInterval: number | undefined;
-
-    updateScaling = () => {
-        if (isNode()) return;
-
-        const aspectRatio = window.innerWidth / window.innerHeight;
-        this.synced.isRotated = aspectRatio < PORTRAIT_ROTATION_THRESHOLD;
-
-        const minViewportSize = Math.min(window.innerWidth, window.innerHeight);
-        const viewportMargin = (minViewportSize / VIEWPORT_MARGIN_REFERENCE_SIZE) * VIEWPORT_MARGIN_BASE;
-
-        const gridSize = getCurrentGridSize();
-        const gridNaturalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
-        const gridNaturalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
-
-        let contentNaturalWidth: number;
-        let contentNaturalHeight: number;
-
-        const connectionStatusHeight = gameState.isMultiplayer ? CONNECTION_STATUS_HEIGHT : 0;
-
-        if (this.synced.isRotated) {
-            contentNaturalWidth = Math.max(gridNaturalWidth, MATCHED_WORDS_WIDTH);
-            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + connectionStatusHeight + (connectionStatusHeight > 0 ? HEADER_GAP : 0) + BUTTONS_ROW_HEIGHT_ESTIMATE + HEADER_GAP + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT + HEADER_GAP + MATCHED_WORDS_HEIGHT_PORTRAIT;
-        } else {
-            contentNaturalWidth = gridNaturalWidth + GRID_TO_WORDS_GAP + MATCHED_WORDS_WIDTH;
-            contentNaturalHeight = HEADER_HEIGHT_ESTIMATE + HEADER_GAP + connectionStatusHeight + (connectionStatusHeight > 0 ? HEADER_GAP : 0) + gridNaturalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
-        }
-
-        let availableWidth = window.innerWidth - (viewportMargin * 2);
-        let availableHeight = window.innerHeight - (viewportMargin * 2);
-
-        const scaleWidth = availableWidth / contentNaturalWidth;
-        const scaleHeight = availableHeight / contentNaturalHeight;
-
-        const scaleFactor = Math.min(scaleWidth, scaleHeight);
-
-        this.synced.scale = Math.max(0.3, scaleFactor);
-    };
-
-    onResize = () => {
-        this.updateScaling();
-    };
 
     preventGlobalTouch = (e: TouchEvent) => {
         if (e.touches.length > 1) {
@@ -265,6 +220,41 @@ export class LetterFastGame extends preact.Component {
             }
         }
     }
+
+    calculateScale = () => {
+        if (isNode()) return;
+
+        const containerWidth = window.innerWidth;
+        const containerHeight = window.innerHeight;
+
+        this.synced.isRotated = containerWidth < containerHeight * 0.75;
+
+        const gridSize = getCurrentGridSize();
+        const gridNaturalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
+        const gridNaturalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
+
+        this.synced.totalWidth = gridNaturalWidth;
+        this.synced.totalHeight = gridNaturalHeight;
+
+        let availableWidth: number;
+        let availableHeight: number;
+
+        if (this.synced.isRotated) {
+            availableWidth = containerWidth - (MARGIN_EMPTY_SIDE * 2);
+            availableHeight = containerHeight - MIN_SPACE_CONTENT_AXIS_PORTRAIT;
+        } else {
+            availableWidth = containerWidth - MIN_SPACE_CONTENT_AXIS_NORMAL;
+            availableHeight = containerHeight - (MARGIN_EMPTY_SIDE * 2);
+        }
+
+        console.log({ availableWidth, availableHeight });
+
+        const scaleWidth = availableWidth / gridNaturalWidth;
+        const scaleHeight = availableHeight / gridNaturalHeight;
+        const scaleFactor = Math.min(scaleWidth, scaleHeight);
+
+        this.synced.scale = Math.max(0.3, scaleFactor);
+    };
 
     convertToMultiplayer = async () => {
         if (isNode()) return;
@@ -418,10 +408,10 @@ export class LetterFastGame extends preact.Component {
     };
 
     async componentDidMount() {
-        this.updateScaling();
-
         if (!isNode()) {
-            window.addEventListener("resize", this.onResize);
+            this.calculateScale();
+
+            window.addEventListener("resize", this.calculateScale);
             window.addEventListener("keydown", this.onKeyDown);
             document.addEventListener("touchstart", this.preventGlobalTouch, { passive: false });
             document.addEventListener("touchmove", this.preventGlobalTouchMove, { passive: false });
@@ -536,7 +526,7 @@ export class LetterFastGame extends preact.Component {
             this.connectionManager = undefined;
         }
         if (!isNode()) {
-            window.removeEventListener("resize", this.onResize);
+            window.removeEventListener("resize", this.calculateScale);
             window.removeEventListener("keydown", this.onKeyDown);
             window.removeEventListener("mousemove", this.onGlobalMouseMove);
             window.removeEventListener("touchmove", this.onGlobalTouchMove, { passive: false } as any);
@@ -628,17 +618,14 @@ export class LetterFastGame extends preact.Component {
         this.synced.currentPos = pos;
         if (DEBUG_MODE) this.synced.debugPositions.push(pos);
 
-        const gridSize = getCurrentGridSize();
-        const totalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
-        const totalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
         let cancelZoneX: number;
         let cancelZoneY: number;
         if (this.synced.isRotated) {
-            cancelZoneX = totalWidth - CANCEL_ZONE_SIZE;
-            cancelZoneY = totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
+            cancelZoneX = this.synced.totalWidth - CANCEL_ZONE_SIZE;
+            cancelZoneY = this.synced.totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
         } else {
-            cancelZoneX = totalWidth + GRID_TO_WORDS_GAP;
-            cancelZoneY = totalHeight - CANCEL_ZONE_SIZE;
+            cancelZoneX = this.synced.totalWidth + GRID_TO_WORDS_GAP;
+            cancelZoneY = this.synced.totalHeight - CANCEL_ZONE_SIZE;
         }
         const wasOverCancel = this.synced.isOverCancelZone;
         this.synced.isOverCancelZone = pos.x >= cancelZoneX && pos.x <= cancelZoneX + CANCEL_ZONE_SIZE && pos.y >= cancelZoneY && pos.y <= cancelZoneY + CANCEL_ZONE_SIZE;
@@ -647,6 +634,7 @@ export class LetterFastGame extends preact.Component {
             this.vibrate();
         }
 
+        const gridSize = getCurrentGridSize();
         let cells = this.synced.selectedCells;
         let last = cells[cells.length - 1];
         if (!last) {
@@ -842,7 +830,7 @@ export class LetterFastGame extends preact.Component {
                         />
                     </div>
                 </div>
-                <div className={css.fontSize(24).relative}>
+                <div className={css.fontSize(20).relative}>
                     Score: {gameState.score}
                     {this.synced.floatingScores.map(fs => (
                         <div
@@ -853,6 +841,10 @@ export class LetterFastGame extends preact.Component {
                             +{fs.points}
                         </div>
                     ))}
+                    {/* 
+                    <span className={css.fontSize(14).colorhsl(0, 0, 70)}>
+                        Window: {isNode() ? "N/A" : `${window.innerWidth}x${window.innerHeight}`}
+                    </span> */}
                 </div>
             </>
         );
@@ -988,153 +980,162 @@ export class LetterFastGame extends preact.Component {
         );
     }
 
-    renderGrid(totalWidth: number, totalHeight: number, gridSize: { width: number; height: number }) {
+    renderGrid() {
+        const gridSize = getCurrentGridSize();
+        const scaledWidth = this.synced.totalWidth * this.synced.scale;
+        const scaledHeight = this.synced.totalHeight * this.synced.scale;
         return (
-            <div
-                ref={elem => { this.wrapper = elem || undefined; }}
-                className={css.relative.size(totalWidth, totalHeight).userSelect("none")}
-                style={{ touchAction: "none" }}
-                onMouseDown={this.onMouseDown as any}
-                onMouseMove={this.onMouseMove as any}
-                onMouseUp={this.onMouseUp}
-                onMouseLeave={this.onMouseLeave}
-                onTouchStart={this.onTouchStart as any}
-                onTouchMove={this.onTouchMove as any}
-                onTouchEnd={this.onTouchEnd as any}
-                onTouchCancel={this.onTouchCancel}
-            >
+            <div className={css.relative.size(scaledWidth, scaledHeight)}>
                 <div
-                    className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
-                    style={{ display: "grid", gridTemplateColumns: `repeat(${gridSize.width}, ${CELL_SIZE}px)`, gap: `${CELL_GAP}px` }}
+                    ref={elem => { this.wrapper = elem || undefined; }}
+                    className={css.size(this.synced.totalWidth, this.synced.totalHeight).userSelect("none")}
+                    style={{
+                        touchAction: "none",
+                        transform: `scale(${this.synced.scale})`,
+                        transformOrigin: "top left"
+                    }}
+                    onMouseDown={this.onMouseDown as any}
+                    onMouseMove={this.onMouseMove as any}
+                    onMouseUp={this.onMouseUp}
+                    onMouseLeave={this.onMouseLeave}
+                    onTouchStart={this.onTouchStart as any}
+                    onTouchMove={this.onTouchMove as any}
+                    onTouchEnd={this.onTouchEnd as any}
+                    onTouchCancel={this.onTouchCancel}
                 >
-                    {gameState.grid.map((row, ri) =>
-                        row.map((cell, ci) => {
-                            let isSelected = this.isCellSelected(ri, ci);
-                            let isPulsing = this.isCellPulsing(ri, ci);
-                            let isExhausted = !this.isCellExhausted(ri, ci);
-                            return (
-                                <div
-                                    key={`${ri}-${ci}`}
-                                    className={css.size(CELL_SIZE, CELL_SIZE).relative
-                                        .hbox(0).justifyContent("center")
-                                        .fontSize(36).fontWeight("bold")
-                                        .borderRadius(8)
-                                        + (isSelected && css.hsl(240, 50, 10).colorhsl(0, 0, 100)
-                                            .background("linear-gradient(135deg, rgba(0,200,255,0.3) 0%, rgba(255,0,200,0.3) 100%), #0a0a1f")
-                                            || css.hsl(0, 0, 95).colorhsl(0, 0, 0)
-                                        )
-                                        + (isExhausted && css.opacity(0.3))
-                                    }
-                                    style={{
-                                        border: isSelected && "3px solid transparent" || "3px solid #ddd",
-                                        backgroundImage: isSelected && "linear-gradient(#0a0a1f, #0a0a1f), linear-gradient(135deg, #00d4ff, #ff00d4)" || undefined,
-                                        backgroundOrigin: "border-box",
-                                        backgroundClip: isSelected && "padding-box, border-box" || undefined,
-                                    }}
-                                >
-                                    {isPulsing && (
+                    <div
+                        className={css.absolute.pos(0, 0).size(this.synced.totalWidth, this.synced.totalHeight)}
+                        style={{ display: "grid", gridTemplateColumns: `repeat(${gridSize.width}, ${CELL_SIZE}px)`, gap: `${CELL_GAP}px` }}
+                    >
+                        {gameState.grid.map((row, ri) =>
+                            row.map((cell, ci) => {
+                                let isSelected = this.isCellSelected(ri, ci);
+                                let isPulsing = this.isCellPulsing(ri, ci);
+                                let isExhausted = !this.isCellExhausted(ri, ci);
+                                return (
+                                    <div
+                                        key={`${ri}-${ci}`}
+                                        className={css.size(CELL_SIZE, CELL_SIZE).relative
+                                            .hbox(0).justifyContent("center")
+                                            .fontSize(36).fontWeight("bold")
+                                            .borderRadius(8)
+                                            + (isSelected && css.hsl(240, 50, 10).colorhsl(0, 0, 100)
+                                                .background("linear-gradient(135deg, rgba(0,200,255,0.3) 0%, rgba(255,0,200,0.3) 100%), #0a0a1f")
+                                                || css.hsl(0, 0, 95).colorhsl(0, 0, 0)
+                                            )
+                                            + (isExhausted && css.opacity(0.3))
+                                        }
+                                        style={{
+                                            border: isSelected && "3px solid transparent" || "3px solid #ddd",
+                                            backgroundImage: isSelected && "linear-gradient(#0a0a1f, #0a0a1f), linear-gradient(135deg, #00d4ff, #ff00d4)" || undefined,
+                                            backgroundOrigin: "border-box",
+                                            backgroundClip: isSelected && "padding-box, border-box" || undefined,
+                                        }}
+                                    >
+                                        {isPulsing && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                    + " pulse-cell"}
+                                                style={{
+                                                    border: "2px solid rgba(255, 255, 255, 0.6)",
+                                                    backgroundColor: "transparent"
+                                                }}
+                                            />
+                                        )}
+                                        {cell.multiplier > 1 && (
+                                            <div
+                                                className={css.absolute.pos(3, 3)
+                                                    .fontSize(11).fontWeight("bold")
+                                                    .pad2(3, 2).borderRadius(4)
+                                                    .colorhsl(0, 0, 100)
+                                                    + (cell.multiplier === 2 && css.hsl(190, 80, 50) || css.hsl(45, 90, 55))
+                                                }
+                                            >
+                                                {cell.multiplier}W
+                                            </div>
+                                        )}
                                         <div
-                                            className={css.absolute.pos(0, 0).fillBoth
-                                                .borderRadius(8)
-                                                + " pulse-cell"}
-                                            style={{
-                                                border: "2px solid rgba(255, 255, 255, 0.6)",
-                                                backgroundColor: "transparent"
-                                            }}
-                                        />
-                                    )}
-                                    {cell.multiplier > 1 && (
-                                        <div
-                                            className={css.absolute.pos(3, 3)
-                                                .fontSize(11).fontWeight("bold")
-                                                .pad2(3, 2).borderRadius(4)
-                                                .colorhsl(0, 0, 100)
-                                                + (cell.multiplier === 2 && css.hsl(190, 80, 50) || css.hsl(45, 90, 55))
+                                            className={css.absolute.top(4).right(7)
+                                                .fontSize(12).fontWeight("normal")
+                                                .whiteSpace("nowrap")
+                                                + (isSelected && css.colorhsl(0, 0, 70) || css.colorhsl(0, 0, 40))
                                             }
                                         >
-                                            {cell.multiplier}W
+                                            {cell.points}
                                         </div>
-                                    )}
-                                    <div
-                                        className={css.absolute.top(4).right(7)
-                                            .fontSize(12).fontWeight("normal")
-                                            .whiteSpace("nowrap")
-                                            + (isSelected && css.colorhsl(0, 0, 70) || css.colorhsl(0, 0, 40))
-                                        }
-                                    >
-                                        {cell.points}
+                                        {cell.letter}
                                     </div>
-                                    {cell.letter}
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-                <canvas
-                    ref={elem => {
-                        if (!elem) return;
-                        this.canvas = elem;
-                        elem.width = totalWidth;
-                        elem.height = totalHeight;
-                        this.redraw();
-                    }}
-                    className={css.absolute.pos(0, 0).size(totalWidth, totalHeight)}
-                    style={{ pointerEvents: "none" }}
-                />
-                {(Date.now() < gameState.timeoutUntil || this.synced.showTimeoutMessage) && (
-                    <div
-                        className={css.absolute.pos(0, 0).fillBoth
-                            .hsla(0, 0, 0, 0.7).hbox(0).justifyContent("center")
-                            .borderRadius(8)
-                            + (this.synced.timeoutFadingOut && " timeout-fadeout" || "")
-                        }
-                    >
+                                );
+                            })
+                        )}
+                    </div>
+                    <canvas
+                        ref={elem => {
+                            if (!elem) return;
+                            this.canvas = elem;
+                            elem.width = this.synced.totalWidth;
+                            elem.height = this.synced.totalHeight;
+                            this.redraw();
+                        }}
+                        className={css.absolute.pos(0, 0).size(this.synced.totalWidth, this.synced.totalHeight)}
+                        style={{ pointerEvents: "none" }}
+                    />
+                    {(Date.now() < gameState.timeoutUntil || this.synced.showTimeoutMessage) && (
                         <div
-                            className={css.fontSize(24).fontWeight("bold")
-                                .colorhsl(0, 0, 100).pad2(20)
-                                .hsl(0, 0, 10).borderRadius(8)
+                            className={css.absolute.pos(0, 0).fillBoth
+                                .hsla(0, 0, 0, 0.7).hbox(0).justifyContent("center")
+                                .borderRadius(8)
+                                + (this.synced.timeoutFadingOut && " timeout-fadeout" || "")
                             }
                         >
-                            {this.synced.timeoutMessage}
+                            <div
+                                className={css.fontSize(24).fontWeight("bold")
+                                    .colorhsl(0, 0, 100).pad2(20)
+                                    .hsl(0, 0, 10).borderRadius(8)
+                                }
+                            >
+                                {this.synced.timeoutMessage}
+                            </div>
                         </div>
-                    </div>
-                )}
-                {this.synced.showCancelZone && (
-                    <div
-                        className={css.absolute.size(CANCEL_ZONE_SIZE, CANCEL_ZONE_SIZE)
-                            .borderRadius(8)
-                            .hbox(0).justifyContent("center")
-                            + (this.synced.isOverCancelZone && css.hsl(0, 80, 50) || css.hsl(0, 0, 30))
-                        }
-                        style={{
-                            left: this.synced.isRotated && `${totalWidth - CANCEL_ZONE_SIZE}px` || `${totalWidth + GRID_TO_WORDS_GAP}px`,
-                            top: this.synced.isRotated && `${totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT}px` || `${totalHeight - CANCEL_ZONE_SIZE}px`,
-                            transition: "background-color 0.1s",
-                            pointerEvents: "none"
-                        }}
-                    >
-                        <div className={css.fontSize(48).fontWeight("bold").colorhsl(0, 0, 100)}>
-                            ✕
+                    )}
+                    {this.synced.showCancelZone && (
+                        <div
+                            className={css.absolute.size(CANCEL_ZONE_SIZE, CANCEL_ZONE_SIZE)
+                                .borderRadius(8)
+                                .hbox(0).justifyContent("center")
+                                + (this.synced.isOverCancelZone && css.hsl(0, 80, 50) || css.hsl(0, 0, 30))
+                            }
+                            style={{
+                                left: this.synced.isRotated && `${this.synced.totalWidth - CANCEL_ZONE_SIZE}px` || `${this.synced.totalWidth + GRID_TO_WORDS_GAP}px`,
+                                top: this.synced.isRotated && `${this.synced.totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT}px` || `${this.synced.totalHeight - CANCEL_ZONE_SIZE}px`,
+                                transition: "background-color 0.1s",
+                                pointerEvents: "none"
+                            }}
+                        >
+                            <div className={css.fontSize(48).fontWeight("bold").colorhsl(0, 0, 100)}>
+                                ✕
+                            </div>
                         </div>
-                    </div>
-                )}
-                {gameState.status === "finished" && (
-                    <div
-                        title="Click to play again"
-                        className={css.absolute.pos(0, 0).fillBoth
-                            .hbox(0).justifyContent("center")
-                            .borderRadius(8).cursor("pointer")
-                        }
-                        onClick={async () => await startGame()}
-                    />
-                )}
+                    )}
+                    {gameState.status === "finished" && (
+                        <div
+                            title="Click to play again"
+                            className={css.absolute.pos(0, 0).fillBoth
+                                .hbox(0).justifyContent("center")
+                                .borderRadius(8).cursor("pointer")
+                            }
+                            onClick={async () => await startGame()}
+                        />
+                    )}
+                </div>
             </div>
         );
     }
 
     renderCurrentWord(currentWord: string) {
         return (
-            <div className={css.fontSize(22).height(32).colorhsl(0, 0, 100)
+            <div className={css.fontSize(16).height(20).colorhsl(0, 0, 100)
                 .fontWeight("bold")
             }>
                 {currentWord}
@@ -1142,12 +1143,12 @@ export class LetterFastGame extends preact.Component {
         );
     }
 
-    renderMatchedWords(totalHeight: number) {
+    renderMatchedWords() {
         return (
             <div className={css.vbox(12).colorhsl(0, 0, 100) + (this.synced.isRotated && css.fillWidth || css.width(250))}>
                 <div className={css.vbox(6).overflowAuto.fillWidth
                     .hsl(240, 30, 15).borderRadius(8).pad2(12)
-                    + (this.synced.isRotated && css.height(MATCHED_WORDS_HEIGHT_PORTRAIT) || css.height(totalHeight))
+                    + (this.synced.isRotated && css.height(150) || css.height(this.synced.totalHeight))
                 }>
                     {gameState.matchedWords.slice().reverse().map((w, i) => (
                         <div key={i} className={css.hbox(8).fontSize(18)}>
@@ -1163,9 +1164,6 @@ export class LetterFastGame extends preact.Component {
     }
 
     render() {
-        let gridSize = getCurrentGridSize();
-        let totalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
-        let totalHeight = CELL_SIZE * gridSize.height + CELL_GAP * (gridSize.height - 1);
         let currentWord = (this.synced.wrongWordCells.length > 0 && this.synced.wrongWordCells || this.synced.selectedCells)
             .map(c => gameState.grid[c.row][c.col].letter)
             .join(" ");
@@ -1176,9 +1174,17 @@ export class LetterFastGame extends preact.Component {
         let timeBarHue = gameState.timeRemaining <= 5000 && 0 || gameState.timeRemaining <= 15000 && 60 || 120;
 
         return (
-            <div className={css.fillBoth.vbox(20)
-                .pad2(20).justifyContent("center").alignItems("center")
-            }>
+            <div
+                className={css.fillBoth.vbox(0)
+                    .justifyContent("center").alignItems("center")
+                }
+                style={{
+                    paddingTop: `calc(${MARGIN_EMPTY_SIDE}px + env(safe-area-inset-top))`,
+                    paddingBottom: `calc(${MARGIN_EMPTY_SIDE}px + env(safe-area-inset-bottom))`,
+                    paddingLeft: `calc(${MARGIN_EMPTY_SIDE}px + env(safe-area-inset-left))`,
+                    paddingRight: `calc(${MARGIN_EMPTY_SIDE}px + env(safe-area-inset-right))`,
+                }}
+            >
                 <style>{`
                     @keyframes pulseOut {
                         0% { 
@@ -1211,18 +1217,15 @@ export class LetterFastGame extends preact.Component {
                         animation: fadeOut ${TIMEOUT_FADEOUT_DURATION}ms ease-out forwards;
                     }
                 `}</style>
-                <div
-                    className={css.vbox(20)}
-                    style={{
-                        transform: `scale(${this.synced.scale})`,
-                        transformOrigin: "center center"
-                    }}
-                >
+                <div className={css.vbox(4)
+                    + (this.synced.isRotated && css.width(this.synced.totalWidth * this.synced.scale))
+                    + (!this.synced.isRotated && css.height(this.synced.totalHeight * this.synced.scale))
+                }>
                     {this.synced.isRotated && (
                         <>
-                            <div className={css.hbox(20).alignItems("start").colorhsl(0, 0, 100)}>
+                            <div className={css.vbox(2).alignItems("start").colorhsl(0, 0, 100)}>
                                 {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                <div className={css.vbox(8)}>
+                                <div className={css.vbox(2)}>
                                     <div className={css.hbox(12).wrap}>
                                         {this.renderButtons()}
                                     </div>
@@ -1239,40 +1242,41 @@ export class LetterFastGame extends preact.Component {
                                     )}
                                 </div>
                             </div>
-                            <div className={css.vbox(12)}>
-                                {this.renderGrid(totalWidth, totalHeight, gridSize)}
+                            <div className={
+                                css.vbox(6)
+
+                            }>
+                                {this.renderGrid()}
                                 {this.renderCurrentWord(currentWord)}
                             </div>
-                            {this.renderMatchedWords(totalHeight)}
+                            {this.renderMatchedWords()}
                         </>
                     )}
                     {!this.synced.isRotated && (
                         <>
-                            <div className={css.hbox(20).alignItems("start").colorhsl(0, 0, 100)}>
-                                {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                <div className={css.vbox(8)}>
-                                    <div className={css.hbox(12).wrap}>
+                            <div className={css.hbox(20).center}>
+                                <div className={css.vbox(20).alignItems("end").colorhsl(0, 0, 100)}>
+                                    {this.renderTimeAndScore(timeBarHue, timePercent)}
+                                    <div className={css.vbox(5).alignItems("end")}>
                                         {this.renderButtons()}
+                                        {!gameState.isMultiplayer && (
+                                            <>
+                                                {this.renderMultiplayerButton()}
+                                            </>
+                                        )}
+                                        {gameState.isMultiplayer && (
+                                            <>
+                                                {this.renderConnectionStatus()}
+                                                {this.renderPlayerScores()}
+                                            </>
+                                        )}
                                     </div>
-                                    {!gameState.isMultiplayer && (
-                                        <div className={css.hbox(12).wrap}>
-                                            {this.renderMultiplayerButton()}
-                                        </div>
-                                    )}
-                                    {gameState.isMultiplayer && (
-                                        <div className={css.hbox(20).wrap}>
-                                            {this.renderConnectionStatus()}
-                                            {this.renderPlayerScores()}
-                                        </div>
-                                    )}
                                 </div>
-                            </div>
-                            <div className={css.hbox(20).alignItems("start")}>
                                 <div className={css.vbox(12)}>
-                                    {this.renderGrid(totalWidth, totalHeight, gridSize)}
+                                    {this.renderGrid()}
                                     {this.renderCurrentWord(currentWord)}
                                 </div>
-                                {this.renderMatchedWords(totalHeight)}
+                                {this.renderMatchedWords()}
                             </div>
                         </>
                     )}
