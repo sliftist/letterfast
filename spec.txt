@@ -1,3 +1,6 @@
+Fix multiplayer on cloudflare
+    - It's not working, I assume we need to make the port not use cloudflare?
+
 - When in multiplayer mode connect to the server, show the server status, and auto reconnect after 5 seconds if we disconnect (and retry every 15 seconds on connection failure).
 - Fix multiplayer
 
