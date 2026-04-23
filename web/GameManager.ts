@@ -259,12 +259,34 @@ export function removePlayerFromGame(gameId: string, player: PlayerIdentifier): 
     game.words.delete(player);
 }
 
-export function broadcastToGame(gameId: string, callback: (client: ClientHandlers, playerIndex: number) => void): void {
+const BROADCAST_TIMEOUT_MS = 15000;
+
+export async function broadcastToGame(gameId: string, callback: (client: ClientHandlers, playerIndex: number) => Promise<void>): Promise<void> {
     const game = games.get(gameId);
     if (!game) return;
-    for (let i = 0; i < game.players.length; i++) {
-        const player = game.players[i];
-        callback(player, i);
+
+    const players = game.players.slice();
+    if (players.length === 0) return;
+
+    const results = await Promise.all(players.map(async (player, i) => {
+        try {
+            await Promise.race([
+                callback(player, i),
+                new Promise<never>((_, reject) => {
+                    setTimeout(() => reject(new Error(`Broadcast to player ${i} in game ${gameId} timed out after ${BROADCAST_TIMEOUT_MS}ms`)), BROADCAST_TIMEOUT_MS);
+                }),
+            ]);
+            return true;
+        } catch (error) {
+            console.error(`Broadcast to player ${i} in game ${gameId} failed:`, error);
+            return false;
+        }
+    }));
+
+    const anySucceeded = results.some(r => r);
+    if (!anySucceeded && games.get(gameId) === game) {
+        console.warn(`All broadcasts failed for game ${gameId}, removing game`);
+        games.delete(gameId);
     }
 }
 

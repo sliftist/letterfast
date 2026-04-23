@@ -70,6 +70,10 @@ function closeAllModals() {
     document.body.style.paddingRight = "";
 }
 
+export function closeGameOverModal() {
+    closeAllModals();
+}
+
 interface GameOverProps {
     state: GameOverState;
     onPlayAgain: () => void;
@@ -150,6 +154,17 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         const isSinglePlayer = state.playerResults.length === 1;
         const isChallengeMode = state.playerResults.length === 2 && state.playerResults.some(p => p.id === "challenger");
         const selfPlayer = state.playerResults.find(p => p.isSelf);
+
+        let commonWords: Set<string> | undefined;
+        if (!isSinglePlayer && state.playerResults.length >= 2 && state.playerResults.every(p => p.matchedWords.length > 0)) {
+            const perPlayerSets = state.playerResults.map(p => new Set(p.matchedWords.map(w => w.word.toUpperCase())));
+            commonWords = new Set<string>();
+            for (const word of perPlayerSets[0]) {
+                if (perPlayerSets.every(s => s.has(word))) {
+                    commonWords.add(word);
+                }
+            }
+        }
 
         const outerPadding = this.synced.isMobile ? 0 : 40;
         const innerPadding = this.synced.isMobile ? 20 : 40;
@@ -296,14 +311,18 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                                 {isSinglePlayer ? "Words You Found" : `Words`} ({words.length}):
                                             </div>
                                             <div className={css.hbox(8).wrap.overflowAuto.maxHeight(200)}>
-                                                {sort(words.slice(), w => -w.points).map((w, i) => (
-                                                    <div key={i} className={css.fontSize(14)
-                                                        .pad2(6, 4).borderRadius(4)
-                                                        .hsl(120, 40, 30)
-                                                    }>
-                                                        {w.word} ({w.points})
-                                                    </div>
-                                                ))}
+                                                {sort(words.slice(), w => -w.points).map((w, i) => {
+                                                    const isCommon = commonWords?.has(w.word.toUpperCase());
+                                                    return (
+                                                        <div key={i} className={css.fontSize(14)
+                                                            .pad2(6, 4).borderRadius(4)
+                                                            .hsl(120, 40, 30)
+                                                            + (isCommon && css.opacity(0.4) || "")
+                                                        }>
+                                                            {w.word} ({w.points})
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     )}

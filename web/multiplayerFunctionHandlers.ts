@@ -1,15 +1,65 @@
 import { createRPC } from "./rpc/createRPC";
-import { GridCell, gameState, GameOverState } from "./GameState";
+import { GridCell, gameState, GameOverState, regenerateGridForCurrentSize } from "./GameState";
 import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
-import { showGameOver } from "./GameOver";
+import { showGameOver, closeGameOverModal } from "./GameOver";
 import { verifySignature } from "./CryptoIdentity";
 import { addNotification } from "./NotificationState";
 
 const MAX_WORDS_PER_PLAYER = 10000;
 const MAX_CHALLENGE_COMPLETIONS = 3;
 const CHALLENGE_EXPIRY_TIME = 24 * 60 * 60 * 1000;
+const END_TO_GAME_OVER_DELAY = 1000;
+const AUTO_RESTART_DELAY = 15000;
+
+function scheduleGameEnd(gameId: string, duration: number): void {
+    setTimeout(() => {
+        void (async () => {
+            const finalGame = GameManager.getGame(gameId);
+            if (!finalGame || finalGame.status !== "playing") return;
+
+            const allWords = GameManager.getAllWords(gameId);
+            const players = GameManager.getPlayerScores(gameId);
+
+            await GameManager.broadcastToGame(gameId, async (client) => {
+                await client.onGameEnd(gameId, players, allWords);
+            });
+
+            if (!GameManager.getGame(gameId)) return;
+
+            setTimeout(() => {
+                GameManager.endGame(gameId);
+                scheduleAutoRestart(gameId);
+            }, END_TO_GAME_OVER_DELAY);
+        })();
+    }, duration);
+}
+
+function scheduleAutoRestart(gameId: string): void {
+    setTimeout(() => {
+        void (async () => {
+            const game = GameManager.getGame(gameId);
+            if (!game) return;
+            if (game.status !== "finished") return;
+            if (game.players.length === 0) return;
+
+            await GameManager.startGamePlaying(gameId);
+            const updatedGame = GameManager.getGame(gameId);
+            if (!updatedGame) return;
+
+            const players = GameManager.getPlayerScores(gameId);
+            await GameManager.broadcastToGame(gameId, async (client, playerIndex) => {
+                await client.onPlayerUpdate(gameId, players, updatedGame.status, playerIndex);
+                await client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
+            });
+
+            if (!GameManager.getGame(gameId)) return;
+
+            scheduleGameEnd(gameId, updatedGame.gameDuration);
+        })();
+    }, AUTO_RESTART_DELAY);
+}
 
 interface ChallengeWatcher {
     publicKey: string;
@@ -31,8 +81,8 @@ function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentif
         const game = GameManager.getGame(gameId);
         if (game) {
             const players = GameManager.getPlayerScores(gameId);
-            GameManager.broadcastToGame(gameId, (playerClient, playerIndex) => {
-                void playerClient.onPlayerUpdate(gameId, players, game.status, playerIndex);
+            void GameManager.broadcastToGame(gameId, async (playerClient, playerIndex) => {
+                await playerClient.onPlayerUpdate(gameId, players, game.status, playerIndex);
             });
         }
     });
@@ -99,11 +149,12 @@ const serverHandlers = {
             let gameT = game;
             // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
             setImmediate(() => {
-                GameManager.broadcastToGame(sanitized, (playerClient, playerIndex) => {
+                void GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
                     console.log("onPlayerUpdate", playerClient, playerIndex);
-                    void playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
+                    await playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
                 });
 
+                void player.onSettingsUpdate(sanitized, gameT.gridWidth, gameT.gridHeight, gameT.gameDuration);
 
                 if (gameT.status === "playing" && gameT.startTime) {
                     void player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
@@ -116,25 +167,11 @@ const serverHandlers = {
                             await GameManager.startGamePlaying(sanitized);
                             const updatedGame = GameManager.getGame(sanitized);
                             if (updatedGame) {
-                                GameManager.broadcastToGame(sanitized, (client) => {
-                                    void client.onGameStart(sanitized, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
+                                void GameManager.broadcastToGame(sanitized, async (client) => {
+                                    await client.onGameStart(sanitized, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
                                 });
 
-                                setTimeout(() => {
-                                    const finalGame = GameManager.getGame(sanitized);
-                                    if (finalGame && finalGame.status === "playing") {
-                                        const allWords = GameManager.getAllWords(sanitized);
-                                        const finalPlayers = GameManager.getPlayerScores(sanitized);
-
-                                        GameManager.broadcastToGame(sanitized, (client) => {
-                                            void client.onGameEnd(sanitized, finalPlayers, allWords);
-                                        });
-
-                                        setTimeout(() => {
-                                            GameManager.endGame(sanitized);
-                                        }, 1000);
-                                    }
-                                }, updatedGame.gameDuration);
+                                scheduleGameEnd(sanitized, updatedGame.gameDuration);
                             }
                         }
                     }, 1000);
@@ -161,25 +198,11 @@ const serverHandlers = {
             throw new Error(`Game ${gameId} not found after starting`);
         }
 
-        GameManager.broadcastToGame(gameId, (client) => {
-            void client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
+        void GameManager.broadcastToGame(gameId, async (client) => {
+            await client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
         });
 
-        setTimeout(() => {
-            const finalGame = GameManager.getGame(gameId);
-            if (finalGame && finalGame.status === "playing") {
-                const allWords = GameManager.getAllWords(gameId);
-                const players = GameManager.getPlayerScores(gameId);
-
-                GameManager.broadcastToGame(gameId, (client) => {
-                    void client.onGameEnd(gameId, players, allWords);
-                });
-
-                setTimeout(() => {
-                    GameManager.endGame(gameId);
-                }, 1000);
-            }
-        }, updatedGame.gameDuration);
+        scheduleGameEnd(gameId, updatedGame.gameDuration);
     },
 
     async submitWord(gameId: string, word: string, cells: { row: number; col: number }[]): Promise<{ points: number }> {
@@ -201,8 +224,8 @@ const serverHandlers = {
 
         const result = await GameManager.submitWord({ gameId, player, word, cells });
         const players = GameManager.getPlayerScores(gameId);
-        GameManager.broadcastToGame(gameId, (client, playerIndex) => {
-            void client.onPlayerUpdate(gameId, players, game.status, playerIndex);
+        void GameManager.broadcastToGame(gameId, async (client, playerIndex) => {
+            await client.onPlayerUpdate(gameId, players, game.status, playerIndex);
         });
 
         return result;
@@ -216,8 +239,8 @@ const serverHandlers = {
 
         GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration });
         const settings = GameManager.getGameSettings(gameId);
-        GameManager.broadcastToGame(gameId, (client) => {
-            void client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration);
+        void GameManager.broadcastToGame(gameId, async (client) => {
+            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration);
         });
     },
 
@@ -303,11 +326,14 @@ export const clientHandlers = {
         gameState.gameDuration = duration;
         gameState.timeRemaining = duration;
         gameState.isMultiplayer = true;
+        gameState.score = 0;
         gameState.matchedWords = [];
         gameState.matchedWordsSet.clear();
         gameState.allWords = {};
         gameState.totalPossibleWords = totalPossibleWords;
         gameState.totalPossibleScore = totalPossibleScore;
+
+        closeGameOverModal();
 
         const updateTimer = () => {
             if (gameState.status !== "playing") return;
@@ -357,9 +383,16 @@ export const clientHandlers = {
 
     async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number): Promise<void> {
         if (gameState.gameId !== gameId) return;
+        const dimensionsChanged = gameState.gridWidth !== gridWidth || gameState.gridHeight !== gridHeight;
         gameState.gridWidth = gridWidth;
         gameState.gridHeight = gridHeight;
         gameState.gameDuration = gameDuration;
+        if (gameState.status !== "playing") {
+            gameState.timeRemaining = gameDuration;
+            if (dimensionsChanged) {
+                await regenerateGridForCurrentSize();
+            }
+        }
     },
 
     async onChallengeCompleted(challengeId: string, playerScore: number, playerWords: { word: string; points: number }[], grid: GridCell[][], totalPossibleScore: number, totalPossibleWords: number, creatorScore: number, creatorWords: { word: string; points: number }[]): Promise<void> {

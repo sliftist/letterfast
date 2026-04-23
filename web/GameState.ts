@@ -269,6 +269,10 @@ export async function changeGridSize(config: { width: number; height: number }) 
     timerInterval = undefined;
 }
 
+export async function regenerateGridForCurrentSize(): Promise<void> {
+    gameState.grid = await generateGrid();
+}
+
 export function getCurrentGridSize(): { width: number; height: number } {
     return { width: gameState.gridWidth, height: gameState.gridHeight };
 }

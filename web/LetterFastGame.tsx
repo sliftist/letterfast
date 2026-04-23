@@ -1,4 +1,4 @@
-import { observable } from "mobx";
+import { observable, reaction, IReactionDisposer } from "mobx";
 import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
@@ -184,6 +184,7 @@ export class LetterFastGame extends preact.Component {
 
     connectionManager: ConnectionManager | undefined;
     reconnectCountdownInterval: number | undefined;
+    gridSizeReactionDisposer: IReactionDisposer | undefined;
 
     preventGlobalTouch = (e: TouchEvent) => {
         if (e.touches.length > 1) {
@@ -411,6 +412,11 @@ export class LetterFastGame extends preact.Component {
         if (!isNode()) {
             this.calculateScale();
 
+            this.gridSizeReactionDisposer = reaction(
+                () => [gameState.gridWidth, gameState.gridHeight],
+                () => this.calculateScale(),
+            );
+
             window.addEventListener("resize", this.calculateScale);
             window.addEventListener("keydown", this.onKeyDown);
             document.addEventListener("touchstart", this.preventGlobalTouch, { passive: false });
@@ -521,6 +527,10 @@ export class LetterFastGame extends preact.Component {
     componentWillUnmount() {
         cleanup();
         this.stopReconnectCountdown();
+        if (this.gridSizeReactionDisposer) {
+            this.gridSizeReactionDisposer();
+            this.gridSizeReactionDisposer = undefined;
+        }
         if (this.connectionManager) {
             this.connectionManager.cleanup();
             this.connectionManager = undefined;
@@ -916,12 +926,14 @@ export class LetterFastGame extends preact.Component {
     renderButtons() {
         return (
             <>
-                <button onClick={async () => await startGame()}>
-                    {gameState.status === "ready" && "Start Game"}
-                    {gameState.status === "playing" && "Restart"}
-                    {gameState.status === "finished" && "Play Again"}
-                </button>
-                {gameState.status === "playing" && (
+                {!gameState.isMultiplayer && (
+                    <button onClick={async () => await startGame()}>
+                        {gameState.status === "ready" && "Start Game"}
+                        {gameState.status === "playing" && "Restart"}
+                        {gameState.status === "finished" && "Play Again"}
+                    </button>
+                )}
+                {gameState.status === "playing" && !gameState.isMultiplayer && (
                     <button onClick={() => endGame()}>
                         End Now
                     </button>
