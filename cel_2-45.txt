@@ -47423,7 +47423,6 @@ pyrotechnics
 pyruvate
 python
 pythons
-qi
 qigong
 quack
 quacked
@@ -68893,7 +68892,6 @@ xenophobia
 xenophobic
 xenotransplantation
 xenotransplantations
-xi
 xylem
 xylitol
 xylophone
