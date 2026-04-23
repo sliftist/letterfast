@@ -182,11 +182,13 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                         .hsl(240, 40, 20)
                         .borderRadius(borderRadius).colorhsl(0, 0, 100)
                         .boxShadow("0 10px 50px rgba(0, 0, 0, 0.5)")
+                        .overflowAuto
+                        .maxHeight("100%")
+                        .border("3px solid transparent")
+                        .backgroundImage("linear-gradient(#2a1a4a, #2a1a4a), linear-gradient(135deg, #00d4ff, #ff00d4)")
+                        .backgroundOrigin("border-box")
                     }
                     style={{
-                        border: "3px solid transparent",
-                        backgroundImage: "linear-gradient(#2a1a4a, #2a1a4a), linear-gradient(135deg, #00d4ff, #ff00d4)",
-                        backgroundOrigin: "border-box",
                         backgroundClip: "padding-box, border-box",
                     }}
                 >
