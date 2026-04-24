@@ -26,8 +26,8 @@ async function fetchWordsBrowser(): Promise<string[]> {
 
     const url = "./words.txt.gz";
 
-    const cacheKey = "letterfast_words_cache2";
-    const metaKey = "letterfast_words_meta2";
+    const cacheKey = "letterfast_words_cache3";
+    const metaKey = "letterfast_words_meta3";
 
     let shouldDownload = true;
     let cachedMeta: CacheMetadata | undefined;
@@ -117,8 +117,8 @@ async function fetchWordsNode(): Promise<string[]> {
     const https = await import("https");
 
     const cacheDir = path.resolve(process.cwd(), "./cache");
-    const cachePath = path.join(cacheDir, "words.txt.gz");
-    const metaPath = path.join(cacheDir, "words.meta.json");
+    const cachePath = path.join(cacheDir, "words.txt2.gz");
+    const metaPath = path.join(cacheDir, "words.meta2.json");
 
     let shouldDownload = true;
     let cachedMeta: CacheMetadata | undefined;

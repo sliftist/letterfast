@@ -183,6 +183,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                         .borderRadius(borderRadius).colorhsl(0, 0, 100)
                         .boxShadow("0 10px 50px rgba(0, 0, 0, 0.5)")
                         .overflowAuto
+                        .fillBoth
                         .maxHeight("100%")
                         .border("3px solid transparent")
                         .backgroundImage("linear-gradient(#2a1a4a, #2a1a4a), linear-gradient(135deg, #00d4ff, #ff00d4)")
