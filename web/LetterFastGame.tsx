@@ -587,6 +587,17 @@ export class LetterFastGame extends preact.Component {
         return undefined;
     }
 
+    remainingWordsForCell(row: number, col: number): number {
+        const key = `${row},${col}`;
+        const wordsForCell = gameState.cellToWords.get(key);
+        if (!wordsForCell) return 0;
+        let count = 0;
+        for (let word of wordsForCell) {
+            if (!gameState.matchedWordsSet.has(word)) count++;
+        }
+        return count;
+    }
+
     handleSelectionStart = async (pos: { x: number; y: number }) => {
         if (gameState.status === "ready") {
             await startGame(false);
@@ -713,7 +724,7 @@ export class LetterFastGame extends preact.Component {
             .join("")
             .toLowerCase();
 
-        if (word.length <= 1) return;
+        if (word.length < 3) return;
 
         const wordSet = await getWordSet();
         if (!wordSet.has(word)) {
@@ -842,6 +853,11 @@ export class LetterFastGame extends preact.Component {
                 </div>
                 <div className={css.fontSize(20).relative}>
                     Score: {gameState.score}
+                    {gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (
+                        <span className={css.fontSize(16).colorhsl(0, 0, 70).marginLeft(6) + ""}>
+                            / {gameState.totalPossibleScore} ({Math.round(gameState.score / gameState.totalPossibleScore * 100)}%)
+                        </span>
+                    )}
                     {this.synced.floatingScores.map(fs => (
                         <div
                             key={fs.id}
@@ -1076,6 +1092,17 @@ export class LetterFastGame extends preact.Component {
                                         >
                                             {cell.points}
                                         </div>
+                                        {gameState.showRemainingWordsPerCell && (
+                                            <div
+                                                className={css.absolute.bottom(4).left(7)
+                                                    .fontSize(12).fontWeight("normal")
+                                                    .whiteSpace("nowrap")
+                                                    + (isSelected && css.colorhsl(0, 0, 70) || css.colorhsl(0, 0, 40))
+                                                }
+                                            >
+                                                {this.remainingWordsForCell(ri, ci)}
+                                            </div>
+                                        )}
                                         {cell.letter}
                                     </div>
                                 );

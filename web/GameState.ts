@@ -56,6 +56,8 @@ export interface GameState {
         publicKey: string;
     };
     connectionStatus: "disconnected" | "connecting" | "connected" | "error";
+    showRemainingWordsPerCell: boolean;
+    showTotalPossibleScore: boolean;
 }
 
 export interface GameHistory {
@@ -123,7 +125,7 @@ async function generateGrid(): Promise<GridCell[][]> {
 
 export const gameHistory: GameHistory[] = [];
 
-const initialConfig = isNode() ? { gridWidth: 4, gridHeight: 4, gameDuration: GAME_DURATION } : getSavedConfigOrDefaults();
+const initialConfig = isNode() ? { gridWidth: 4, gridHeight: 4, gameDuration: GAME_DURATION, showRemainingWordsPerCell: false, showTotalPossibleScore: false } : getSavedConfigOrDefaults();
 
 export const gameState = observable<GameState>({
     status: "ready",
@@ -149,7 +151,18 @@ export const gameState = observable<GameState>({
     challengerData: undefined,
     challengeMetadata: undefined,
     connectionStatus: "disconnected",
+    showRemainingWordsPerCell: !!initialConfig.showRemainingWordsPerCell,
+    showTotalPossibleScore: !!initialConfig.showTotalPossibleScore,
 });
+
+export function applySettings(settings: { showRemainingWordsPerCell?: boolean; showTotalPossibleScore?: boolean }) {
+    if (settings.showRemainingWordsPerCell !== undefined) {
+        gameState.showRemainingWordsPerCell = settings.showRemainingWordsPerCell;
+    }
+    if (settings.showTotalPossibleScore !== undefined) {
+        gameState.showTotalPossibleScore = settings.showTotalPossibleScore;
+    }
+}
 
 void generateGrid().then(grid => {
     if (!gameState.isChallengeMode) {

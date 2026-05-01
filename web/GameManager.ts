@@ -180,8 +180,8 @@ export async function submitWord(config: {
         throw new Error(`Word ${config.word} is not in dictionary`);
     }
 
-    if (config.cells.length < 2) {
-        throw new Error(`Word must be at least 2 letters`);
+    if (config.cells.length < 3) {
+        throw new Error(`Word must be at least 3 letters`);
     }
 
     for (let i = 1; i < config.cells.length; i++) {

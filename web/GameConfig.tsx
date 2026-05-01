@@ -2,7 +2,7 @@ import preact from "preact";
 import { css } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import { pageURL, joinGameIdURL } from "./Page";
-import { changeGridSize, getCurrentGridSize, gameState } from "./GameState";
+import { changeGridSize, getCurrentGridSize, gameState, applySettings } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
 
@@ -12,6 +12,8 @@ export interface SavedConfig {
     gridWidth: number;
     gridHeight: number;
     gameDuration: number;
+    showRemainingWordsPerCell?: boolean;
+    showTotalPossibleScore?: boolean;
 }
 
 export function loadSavedConfig(): SavedConfig | undefined {
@@ -22,7 +24,13 @@ export function loadSavedConfig(): SavedConfig | undefined {
         if (config.gridWidth >= 2 && config.gridWidth <= 10 &&
             config.gridHeight >= 2 && config.gridHeight <= 10 &&
             config.gameDuration >= 10000 && config.gameDuration <= 3600000) {
-            return config;
+            return {
+                gridWidth: config.gridWidth,
+                gridHeight: config.gridHeight,
+                gameDuration: config.gameDuration,
+                showRemainingWordsPerCell: !!config.showRemainingWordsPerCell,
+                showTotalPossibleScore: !!config.showTotalPossibleScore,
+            };
         }
     } catch (error) {
         console.error("Failed to load saved config:", error);
@@ -45,6 +53,8 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         gridWidth: 4,
         gridHeight: 4,
         gameDuration: 90000,
+        showRemainingWordsPerCell: false,
+        showTotalPossibleScore: false,
     };
 }
 
@@ -54,6 +64,8 @@ export class GameConfig extends preact.Component {
         customWidth: 4,
         customHeight: 4,
         gameDuration: 90000,
+        showRemainingWordsPerCell: false,
+        showTotalPossibleScore: false,
         gameIdToJoin: "",
         creating: false,
         joining: false,
@@ -65,6 +77,12 @@ export class GameConfig extends preact.Component {
             gridWidth: this.synced.customWidth,
             gridHeight: this.synced.customHeight,
             gameDuration: this.synced.gameDuration,
+            showRemainingWordsPerCell: this.synced.showRemainingWordsPerCell,
+            showTotalPossibleScore: this.synced.showTotalPossibleScore,
+        });
+        applySettings({
+            showRemainingWordsPerCell: this.synced.showRemainingWordsPerCell,
+            showTotalPossibleScore: this.synced.showTotalPossibleScore,
         });
     };
 
@@ -74,6 +92,8 @@ export class GameConfig extends preact.Component {
             this.synced.customWidth = saved.gridWidth;
             this.synced.customHeight = saved.gridHeight;
             this.synced.gameDuration = saved.gameDuration;
+            this.synced.showRemainingWordsPerCell = saved.showRemainingWordsPerCell ?? false;
+            this.synced.showTotalPossibleScore = saved.showTotalPossibleScore ?? false;
         } else {
             let size = getCurrentGridSize();
             this.synced.customWidth = size.width;
@@ -228,6 +248,36 @@ export class GameConfig extends preact.Component {
                             />
                             <div className={css.fontSize(20)}>seconds (10-3600)</div>
                         </div>
+                    </div>
+
+                    <div className={css.vbox(16)}>
+                        <div className={css.fontSize(24).fontWeight("bold")}>
+                            Display
+                        </div>
+                        <label className={css.hbox(12).alignItems("center").fontSize(18).cursor("pointer")}>
+                            <input
+                                type="checkbox"
+                                checked={this.synced.showRemainingWordsPerCell}
+                                onChange={(e) => {
+                                    this.synced.showRemainingWordsPerCell = e.currentTarget.checked;
+                                    this.saveCurrentConfig();
+                                }}
+                                className={css.size(20, 20) + ""}
+                            />
+                            <span>Show remaining words per tile</span>
+                        </label>
+                        <label className={css.hbox(12).alignItems("center").fontSize(18).cursor("pointer")}>
+                            <input
+                                type="checkbox"
+                                checked={this.synced.showTotalPossibleScore}
+                                onChange={(e) => {
+                                    this.synced.showTotalPossibleScore = e.currentTarget.checked;
+                                    this.saveCurrentConfig();
+                                }}
+                                className={css.size(20, 20) + ""}
+                            />
+                            <span>Show total possible score and percentage</span>
+                        </label>
                     </div>
 
                     <div className={css.vbox(16)}>
