@@ -188,11 +188,29 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                         .border("3px solid transparent")
                         .backgroundImage("linear-gradient(#2a1a4a, #2a1a4a), linear-gradient(135deg, #00d4ff, #ff00d4)")
                         .backgroundOrigin("border-box")
+                        .relative
                     }
                     style={{
                         backgroundClip: "padding-box, border-box",
                     }}
                 >
+                    <button
+                        onClick={closeGameOverModal}
+                        aria-label="Close"
+                        className={css.absolute.top(12).right(12)
+                            .size(36, 36).borderRadius(18)
+                            .hbox(0).justifyContent("center").alignItems("center")
+                            .fontSize(20).fontWeight("bold")
+                            .colorhsl(0, 0, 100)
+                            .hsla(0, 0, 0, 0.4)
+                            .border("1px solid rgba(255,255,255,0.3)")
+                            .cursor("pointer")
+                            .zIndex(1)
+                            + ""
+                        }
+                    >
+                        ×
+                    </button>
                     <div className={css.fontSize(32).fontWeight("bold").textAlign("center")}>
                         Game Over!
                     </div>
