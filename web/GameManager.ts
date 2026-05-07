@@ -22,6 +22,8 @@ interface Game {
     lastActivityTime: number;
     totalPossibleWords: number;
     totalPossibleScore: number;
+    showRemainingWordsPerCell: boolean;
+    showTotalPossibleScore: boolean;
 }
 
 const games = new Map<string, Game>();
@@ -60,6 +62,8 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
         lastActivityTime: now,
         totalPossibleWords: gridMetadata.totalPossibleWords,
         totalPossibleScore: gridMetadata.totalPossibleScore,
+        showRemainingWordsPerCell: false,
+        showTotalPossibleScore: false,
     };
 
     games.set(gameId, game);
@@ -67,7 +71,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
     return { gameId };
 }
 
-export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number): Promise<void> {
+export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell = false, showTotalPossibleScore = false): Promise<void> {
     const now = Date.now();
     const gridMetadata = await generateGameGrid(now, gridWidth, gridHeight);
 
@@ -88,6 +92,8 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         lastActivityTime: now,
         totalPossibleWords: gridMetadata.totalPossibleWords,
         totalPossibleScore: gridMetadata.totalPossibleScore,
+        showRemainingWordsPerCell,
+        showTotalPossibleScore,
     };
 
     games.set(gameId, game);
@@ -296,6 +302,8 @@ export function updateGameSettings(config: {
     gridWidth?: number;
     gridHeight?: number;
     gameDuration?: number;
+    showRemainingWordsPerCell?: boolean;
+    showTotalPossibleScore?: boolean;
 }): void {
     const game = games.get(config.gameId);
     if (!game) {
@@ -328,9 +336,17 @@ export function updateGameSettings(config: {
         }
         game.gameDuration = config.gameDuration;
     }
+
+    if (config.showRemainingWordsPerCell !== undefined) {
+        game.showRemainingWordsPerCell = !!config.showRemainingWordsPerCell;
+    }
+
+    if (config.showTotalPossibleScore !== undefined) {
+        game.showTotalPossibleScore = !!config.showTotalPossibleScore;
+    }
 }
 
-export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number } {
+export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean } {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
@@ -339,6 +355,8 @@ export function getGameSettings(gameId: string): { gridWidth: number; gridHeight
         gridWidth: game.gridWidth,
         gridHeight: game.gridHeight,
         gameDuration: game.gameDuration,
+        showRemainingWordsPerCell: game.showRemainingWordsPerCell,
+        showTotalPossibleScore: game.showTotalPossibleScore,
     };
 }
 

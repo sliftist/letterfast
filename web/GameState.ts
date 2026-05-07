@@ -58,6 +58,7 @@ export interface GameState {
     connectionStatus: "disconnected" | "connecting" | "connected" | "error";
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
+    restartCountdownEnd: number;
 }
 
 export interface GameHistory {
@@ -153,6 +154,7 @@ export const gameState = observable<GameState>({
     connectionStatus: "disconnected",
     showRemainingWordsPerCell: !!initialConfig.showRemainingWordsPerCell,
     showTotalPossibleScore: !!initialConfig.showTotalPossibleScore,
+    restartCountdownEnd: 0,
 });
 
 export function applySettings(settings: { showRemainingWordsPerCell?: boolean; showTotalPossibleScore?: boolean }) {

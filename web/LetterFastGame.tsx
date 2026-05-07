@@ -278,7 +278,9 @@ export class LetterFastGame extends preact.Component {
                         gameId,
                         gameState.gridWidth,
                         gameState.gridHeight,
-                        gameState.gameDuration
+                        gameState.gameDuration,
+                        gameState.showRemainingWordsPerCell,
+                        gameState.showTotalPossibleScore
                     );
 
                     joinGameIdURL.value = gameId;

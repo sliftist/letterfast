@@ -1,7 +1,7 @@
 import * as preact from "preact";
 import { observer } from "sliftutils/render-utils/observer";
 import { css } from "typesafecss";
-import { GameOverState, gameHistory } from "./GameState";
+import { GameOverState, gameHistory, gameState } from "./GameState";
 import { sort } from "socket-function/src/misc";
 import { observable } from "mobx";
 import { analyzeWords, WordAnalysisResult } from "./WordAnalysis";
@@ -87,7 +87,11 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         challengeLinkCopied: false,
         challengeLinkCopyFailed: false,
         isMobile: false,
+        countdownNow: Date.now(),
+        restartRequesting: false,
     });
+
+    countdownInterval: number | undefined;
 
     updateMobileState = () => {
         this.synced.isMobile = window.innerWidth <= 600;
@@ -96,6 +100,9 @@ class GameOverComponent extends preact.Component<GameOverProps> {
     async componentDidMount() {
         this.updateMobileState();
         window.addEventListener("resize", this.updateMobileState);
+        this.countdownInterval = window.setInterval(() => {
+            this.synced.countdownNow = Date.now();
+        }, 250);
 
         const selfPlayer = this.props.state.playerResults.find(p => p.isSelf);
         if (selfPlayer) {
@@ -112,6 +119,10 @@ class GameOverComponent extends preact.Component<GameOverProps> {
 
     componentWillUnmount() {
         window.removeEventListener("resize", this.updateMobileState);
+        if (this.countdownInterval !== undefined) {
+            clearInterval(this.countdownInterval);
+            this.countdownInterval = undefined;
+        }
     }
 
     copyToClipboard = async (text: string): Promise<boolean> => {
@@ -268,7 +279,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                         )}
                                     </div>
 
-                                    {isSinglePlayer && !this.synced.isLoading && this.synced.analysis && (
+                                    {isMe && !this.synced.isLoading && this.synced.analysis && (
                                         <div className={css.vbox(16)}>
                                             {this.synced.analysis.commonMissedWords.length > 0 && (
                                                 <div className={css.vbox(8)}>
@@ -352,13 +363,48 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                         })}
                     </div>
 
-                    <button onClick={() => {
-                        challengeURL.reset();
-                        closeAllModals();
-                        onPlayAgain();
-                    }}>
-                        Play Again
-                    </button>
+                    {gameState.isMultiplayer && !isChallengeMode ? (() => {
+                        const countdownEnd = gameState.restartCountdownEnd;
+                        const secondsLeft = countdownEnd > 0
+                            ? Math.max(0, Math.ceil((countdownEnd - this.synced.countdownNow) / 1000))
+                            : 0;
+                        const isCountingDown = countdownEnd > 0 && secondsLeft > 0;
+                        return (
+                            <div className={css.vbox(8)}>
+                                <button
+                                    disabled={isCountingDown || this.synced.restartRequesting}
+                                    onClick={async () => {
+                                        if (!gameState.gameId) return;
+                                        this.synced.restartRequesting = true;
+                                        try {
+                                            const rpc = getRPCClient();
+                                            await rpc.requestRestart(gameState.gameId);
+                                        } catch (error) {
+                                            console.error("Failed to request restart:", error);
+                                        } finally {
+                                            this.synced.restartRequesting = false;
+                                        }
+                                    }}
+                                >
+                                    {isCountingDown ? `Continuing in ${secondsLeft}…` : "Continue"}
+                                </button>
+                                <button onClick={() => {
+                                    closeAllModals();
+                                    onPlayAgain();
+                                }}>
+                                    Leave to Lobby
+                                </button>
+                            </div>
+                        );
+                    })() : (
+                        <button onClick={() => {
+                            challengeURL.reset();
+                            closeAllModals();
+                            onPlayAgain();
+                        }}>
+                            Play Again
+                        </button>
+                    )}
 
                     {selfPlayer && !isNode() && (
                         <button onClick={async () => {

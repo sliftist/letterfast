@@ -84,6 +84,24 @@ export class GameConfig extends preact.Component {
             showRemainingWordsPerCell: this.synced.showRemainingWordsPerCell,
             showTotalPossibleScore: this.synced.showTotalPossibleScore,
         });
+
+        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
+            void (async () => {
+                try {
+                    const rpc = getRPCClient();
+                    await rpc.updateGameSettings(
+                        gameState.gameId!,
+                        this.synced.customWidth,
+                        this.synced.customHeight,
+                        this.synced.gameDuration,
+                        this.synced.showRemainingWordsPerCell,
+                        this.synced.showTotalPossibleScore
+                    );
+                } catch (error) {
+                    console.error("Failed to push settings to server:", error);
+                }
+            })();
+        }
     };
 
     componentDidMount() {
@@ -250,35 +268,45 @@ export class GameConfig extends preact.Component {
                         </div>
                     </div>
 
-                    <div className={css.vbox(16)}>
-                        <div className={css.fontSize(24).fontWeight("bold")}>
-                            Display
-                        </div>
-                        <label className={css.hbox(12).alignItems("center").fontSize(18).cursor("pointer")}>
-                            <input
-                                type="checkbox"
-                                checked={this.synced.showRemainingWordsPerCell}
-                                onChange={(e) => {
-                                    this.synced.showRemainingWordsPerCell = e.currentTarget.checked;
-                                    this.saveCurrentConfig();
-                                }}
-                                className={css.size(20, 20) + ""}
-                            />
-                            <span>Show remaining words per tile</span>
-                        </label>
-                        <label className={css.hbox(12).alignItems("center").fontSize(18).cursor("pointer")}>
-                            <input
-                                type="checkbox"
-                                checked={this.synced.showTotalPossibleScore}
-                                onChange={(e) => {
-                                    this.synced.showTotalPossibleScore = e.currentTarget.checked;
-                                    this.saveCurrentConfig();
-                                }}
-                                className={css.size(20, 20) + ""}
-                            />
-                            <span>Show total possible score and percentage</span>
-                        </label>
-                    </div>
+                    {(() => {
+                        const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const showRemainingWordsPerCell = inMultiplayer ? gameState.showRemainingWordsPerCell : this.synced.showRemainingWordsPerCell;
+                        const showTotalPossibleScore = inMultiplayer ? gameState.showTotalPossibleScore : this.synced.showTotalPossibleScore;
+                        return (
+                            <div className={css.vbox(16)}>
+                                <div className={css.fontSize(24).fontWeight("bold")}>
+                                    Display{inMultiplayer && !isHost ? " (set by host)" : ""}
+                                </div>
+                                <label className={css.hbox(12).alignItems("center").fontSize(18) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                    <input
+                                        type="checkbox"
+                                        checked={showRemainingWordsPerCell}
+                                        disabled={!isHost}
+                                        onChange={(e) => {
+                                            this.synced.showRemainingWordsPerCell = e.currentTarget.checked;
+                                            this.saveCurrentConfig();
+                                        }}
+                                        className={css.size(20, 20) + ""}
+                                    />
+                                    <span>Show remaining words per tile</span>
+                                </label>
+                                <label className={css.hbox(12).alignItems("center").fontSize(18) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                    <input
+                                        type="checkbox"
+                                        checked={showTotalPossibleScore}
+                                        disabled={!isHost}
+                                        onChange={(e) => {
+                                            this.synced.showTotalPossibleScore = e.currentTarget.checked;
+                                            this.saveCurrentConfig();
+                                        }}
+                                        className={css.size(20, 20) + ""}
+                                    />
+                                    <span>Show total possible score and percentage</span>
+                                </label>
+                            </div>
+                        );
+                    })()}
 
                     <div className={css.vbox(16)}>
                         <div className={css.fontSize(24).fontWeight("bold")}>
