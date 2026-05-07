@@ -14,6 +14,8 @@ export interface SavedConfig {
     gameDuration: number;
     showRemainingWordsPerCell?: boolean;
     showTotalPossibleScore?: boolean;
+    gameMode?: "competitive" | "cooperative";
+    coopGoalFraction?: number;
 }
 
 export function loadSavedConfig(): SavedConfig | undefined {
@@ -30,6 +32,9 @@ export function loadSavedConfig(): SavedConfig | undefined {
                 gameDuration: config.gameDuration,
                 showRemainingWordsPerCell: !!config.showRemainingWordsPerCell,
                 showTotalPossibleScore: !!config.showTotalPossibleScore,
+                gameMode: config.gameMode === "cooperative" ? "cooperative" : "competitive",
+                coopGoalFraction: typeof config.coopGoalFraction === "number" && config.coopGoalFraction > 0 && config.coopGoalFraction <= 1
+                    ? config.coopGoalFraction : 0.5,
             };
         }
     } catch (error) {
@@ -55,6 +60,8 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         gameDuration: 90000,
         showRemainingWordsPerCell: false,
         showTotalPossibleScore: false,
+        gameMode: "competitive",
+        coopGoalFraction: 0.5,
     };
 }
 

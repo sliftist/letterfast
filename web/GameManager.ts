@@ -24,6 +24,30 @@ interface Game {
     totalPossibleScore: number;
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
+    gameMode: "competitive" | "cooperative";
+    coopGoalFraction: number;
+    timerSeqNum: number;
+}
+
+export interface GameSnapshot {
+    gameId: string;
+    status: "waiting" | "playing" | "finished";
+    hostPlayerIndex: number;
+    yourPlayerIndex: number;
+    players: { id: string; score: number }[];
+    gridWidth: number;
+    gridHeight: number;
+    gameDuration: number;
+    gameMode: "competitive" | "cooperative";
+    coopGoalFraction: number;
+    showRemainingWordsPerCell: boolean;
+    showTotalPossibleScore: boolean;
+    totalPossibleWords: number;
+    totalPossibleScore: number;
+    grid: GridCell[][];
+    startTime: number | undefined;
+    coopMatchedWords: { word: string; points: number; playerIndex: number }[];
+    timerSeqNum: number;
 }
 
 const games = new Map<string, Game>();
@@ -64,6 +88,9 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
         totalPossibleScore: gridMetadata.totalPossibleScore,
         showRemainingWordsPerCell: false,
         showTotalPossibleScore: false,
+        gameMode: "competitive",
+        coopGoalFraction: 0.5,
+        timerSeqNum: 0,
     };
 
     games.set(gameId, game);
@@ -94,6 +121,9 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         totalPossibleScore: gridMetadata.totalPossibleScore,
         showRemainingWordsPerCell,
         showTotalPossibleScore,
+        gameMode: "competitive",
+        coopGoalFraction: 0.5,
+        timerSeqNum: 0,
     };
 
     games.set(gameId, game);
@@ -122,16 +152,13 @@ export function validateStartGame(gameId: string, player: PlayerIdentifier): voi
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
     }
-    if (game.status === "playing") {
-        throw new Error(`Game ${gameId} is currently playing`);
-    }
     if (game.players[0] !== player) {
-        throw new Error(`Only the first player can start the game`);
+        throw new Error(`Only the host can start the game`);
     }
 }
 
 
-export async function startGamePlaying(gameId: string): Promise<void> {
+export async function startGamePlaying(gameId: string): Promise<number> {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
@@ -145,11 +172,50 @@ export async function startGamePlaying(gameId: string): Promise<void> {
     game.startTime = now;
     game.endTime = now + game.gameDuration;
     game.lastActivityTime = now;
+    game.timerSeqNum++;
 
     for (const player of game.players) {
         game.scores.set(player, 0);
         game.words.set(player, []);
     }
+    return game.timerSeqNum;
+}
+
+export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnapshot | undefined {
+    const game = games.get(gameId);
+    if (!game) return undefined;
+    const yourIdx = game.players.indexOf(player);
+    const players = game.players.map((p, index) => ({
+        id: `player${index + 1}`,
+        score: game.scores.get(p) || 0,
+    }));
+    const coopMatchedWords: { word: string; points: number; playerIndex: number }[] = [];
+    if (game.gameMode === "cooperative") {
+        game.players.forEach((p, idx) => {
+            const ws = game.words.get(p) || [];
+            for (const w of ws) coopMatchedWords.push({ word: w.word, points: w.points, playerIndex: idx });
+        });
+    }
+    return {
+        gameId: game.id,
+        status: game.status,
+        hostPlayerIndex: 0,
+        yourPlayerIndex: yourIdx,
+        players,
+        gridWidth: game.gridWidth,
+        gridHeight: game.gridHeight,
+        gameDuration: game.gameDuration,
+        gameMode: game.gameMode,
+        coopGoalFraction: game.coopGoalFraction,
+        showRemainingWordsPerCell: game.showRemainingWordsPerCell,
+        showTotalPossibleScore: game.showTotalPossibleScore,
+        totalPossibleWords: game.totalPossibleWords,
+        totalPossibleScore: game.totalPossibleScore,
+        grid: game.grid,
+        startTime: game.startTime,
+        coopMatchedWords,
+        timerSeqNum: game.timerSeqNum,
+    };
 }
 
 export function endGame(gameId: string): void {
@@ -210,6 +276,13 @@ export async function submitWord(config: {
     const playerWords = game.words.get(config.player) || [];
     if (playerWords.some(w => w.word.toLowerCase() === wordLower)) {
         throw new Error(`Word ${config.word} already played`);
+    }
+    if (game.gameMode === "cooperative") {
+        for (const [, otherWords] of game.words) {
+            if (otherWords.some(w => w.word.toLowerCase() === wordLower)) {
+                throw new Error(`Word ${config.word} already played`);
+            }
+        }
     }
 
     const points = calculateWordScoreForGrid(game.grid, config.cells);
@@ -304,13 +377,12 @@ export function updateGameSettings(config: {
     gameDuration?: number;
     showRemainingWordsPerCell?: boolean;
     showTotalPossibleScore?: boolean;
+    gameMode?: "competitive" | "cooperative";
+    coopGoalFraction?: number;
 }): void {
     const game = games.get(config.gameId);
     if (!game) {
         throw new Error(`Game ${config.gameId} not found`);
-    }
-    if (game.status === "playing") {
-        throw new Error(`Cannot update settings while game is playing`);
     }
     if (game.players[0] !== config.player) {
         throw new Error(`Only the host can update game settings`);
@@ -344,9 +416,18 @@ export function updateGameSettings(config: {
     if (config.showTotalPossibleScore !== undefined) {
         game.showTotalPossibleScore = !!config.showTotalPossibleScore;
     }
+
+    if (config.gameMode !== undefined) {
+        game.gameMode = config.gameMode === "cooperative" ? "cooperative" : "competitive";
+    }
+    if (config.coopGoalFraction !== undefined) {
+        game.coopGoalFraction = Math.max(0.05, Math.min(1, config.coopGoalFraction));
+    }
+
+    game.timerSeqNum++;
 }
 
-export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean } {
+export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative"; coopGoalFraction: number } {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
@@ -357,6 +438,8 @@ export function getGameSettings(gameId: string): { gridWidth: number; gridHeight
         gameDuration: game.gameDuration,
         showRemainingWordsPerCell: game.showRemainingWordsPerCell,
         showTotalPossibleScore: game.showTotalPossibleScore,
+        gameMode: game.gameMode,
+        coopGoalFraction: game.coopGoalFraction,
     };
 }
 

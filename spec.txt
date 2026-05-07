@@ -1,26 +1,14 @@
 
-
-
-Cooperative mode
-    Goal percentage
-    Show words other people got with some kind of animation
-Competitive mode
-Allow viewing past words
-
-Fix multiplayer on cloudflare
-    - It's not working, I assume we need to make the port not use cloudflare?
-
-- When in multiplayer mode connect to the server, show the server status, and auto reconnect after 5 seconds if we disconnect (and retry every 15 seconds on connection failure).
-- Fix multiplayer
-
-
-A setting which disallows using words that other people have used. 
-    - A setting which shows the words other people have guessed as well (this is hard to display... we might just want to show the last few words, or even JUST the last word).
+In browser speech => text
+In Browser whisper => text
+- Do we want to check for volume levels, to ignore other people talking?
 
 A version where you can speak the words into your phone. 
     - Some kind of way to control the loudness needed to count the speaking. 
-    - Then you could play with people in the same room, and you would yell out words, and you could hear the other people saying the words, and so the how will tell you what words not to guess. And because you can hear them, you can then try to go off of their words, so it becomes very competitive. 
+    - Then you could play with people in the same room, and you would yell out words, and you could hear the other people saying the words, and so the how will tell you what words not to guess. And because you can hear them, you can then try to go off of their words, so it becomes very competitive.
 
+
+Competitive mode, where points aren't shared, and there is a timelimit, BUT, you can't use words other people have. You are NOT shown other people's words, unless you try to use them, then it shows as crossed out in your word list, and we flash a red outline of the board to indicate the word was already taken.
 
 
 

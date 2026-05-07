@@ -25,12 +25,21 @@ export interface MultiplayerPlayer {
     score: number;
 }
 
+export type GameMode = "competitive" | "cooperative";
+
+export interface MatchedWord {
+    word: string;
+    points: number;
+    playerIndex?: number;
+}
+
 export interface GameState {
     status: "ready" | "playing" | "finished" | "waiting";
     grid: GridCell[][];
     timeRemaining: number;
+    elapsedTime: number;
     score: number;
-    matchedWords: { word: string; points: number }[];
+    matchedWords: MatchedWord[];
     matchedWordsSet: Set<string>;
     isMultiplayer: boolean;
     gameId: string | undefined;
@@ -59,6 +68,11 @@ export interface GameState {
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
     restartCountdownEnd: number;
+    gameMode: GameMode;
+    coopGoalFraction: number;
+    peerFlashRequest?: { id: number; cells: { row: number; col: number }[]; playerIndex: number };
+    lastGameOverState?: GameOverState;
+    lastGameOverOnPlayAgain?: () => void;
 }
 
 export interface GameHistory {
@@ -132,10 +146,9 @@ export const gameState = observable<GameState>({
     status: "ready",
     grid: [],
     timeRemaining: initialConfig.gameDuration,
+    elapsedTime: 0,
     score: 0,
-    matchedWords: [
-
-    ],
+    matchedWords: [] as MatchedWord[],
     matchedWordsSet: new Set<string>(),
     isMultiplayer: false,
     gameId: undefined,
@@ -157,14 +170,30 @@ export const gameState = observable<GameState>({
     showRemainingWordsPerCell: !!initialConfig.showRemainingWordsPerCell,
     showTotalPossibleScore: !!initialConfig.showTotalPossibleScore,
     restartCountdownEnd: 0,
+    gameMode: (initialConfig as any).gameMode || "competitive",
+    coopGoalFraction: (initialConfig as any).coopGoalFraction ?? 0.5,
+    peerFlashRequest: undefined,
+    lastGameOverState: undefined,
+    lastGameOverOnPlayAgain: undefined,
 });
 
-export function applySettings(settings: { showRemainingWordsPerCell?: boolean; showTotalPossibleScore?: boolean }) {
+export function applySettings(settings: {
+    showRemainingWordsPerCell?: boolean;
+    showTotalPossibleScore?: boolean;
+    gameMode?: GameMode;
+    coopGoalFraction?: number;
+}) {
     if (settings.showRemainingWordsPerCell !== undefined) {
         gameState.showRemainingWordsPerCell = settings.showRemainingWordsPerCell;
     }
     if (settings.showTotalPossibleScore !== undefined) {
         gameState.showTotalPossibleScore = settings.showTotalPossibleScore;
+    }
+    if (settings.gameMode !== undefined) {
+        gameState.gameMode = settings.gameMode;
+    }
+    if (settings.coopGoalFraction !== undefined) {
+        gameState.coopGoalFraction = Math.max(0.05, Math.min(1, settings.coopGoalFraction));
     }
 }
 
@@ -187,8 +216,11 @@ export async function startGame(regenerateGrid = true, duration?: number) {
         gameState.challengerData = undefined;
     }
     gameState.timeRemaining = gameState.gameDuration;
+    gameState.elapsedTime = 0;
     gameState.score = 0;
     gameState.matchedWords = [];
+    gameState.lastGameOverState = undefined;
+    gameState.lastGameOverOnPlayAgain = undefined;
     gameState.matchedWordsSet.clear();
     gameState.consecutiveWrongWords = 0;
     gameState.timeoutUntil = 0;
@@ -196,7 +228,16 @@ export async function startGame(regenerateGrid = true, duration?: number) {
     let startTime = Date.now();
     timerInterval = window.setInterval(() => {
         if (gameState.status !== "playing") return;
-        gameState.timeRemaining = Math.max(0, gameState.gameDuration - (Date.now() - startTime));
+        const elapsed = Date.now() - startTime;
+        gameState.elapsedTime = elapsed;
+        if (gameState.gameMode === "cooperative") {
+            const goal = Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction));
+            if (gameState.score >= goal && gameState.totalPossibleScore > 0) {
+                void endGame();
+            }
+            return;
+        }
+        gameState.timeRemaining = Math.max(0, gameState.gameDuration - elapsed);
         if (gameState.timeRemaining === 0) {
             void endGame();
         }
@@ -263,7 +304,10 @@ export async function endGame() {
             totalPossibleScore: gameState.totalPossibleScore,
             totalPossibleWords: gameState.totalPossibleWords,
         };
-        showGameOver(gameOverState, async () => await startGame());
+        const onPlayAgain = () => { void startGame(); };
+        gameState.lastGameOverState = gameOverState;
+        gameState.lastGameOverOnPlayAgain = onPlayAgain;
+        showGameOver(gameOverState, onPlayAgain);
     }
 }
 

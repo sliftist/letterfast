@@ -14,12 +14,27 @@ const END_TO_GAME_OVER_DELAY = 1000;
 const RESTART_COUNTDOWN_MS = 10000;
 
 const pendingRestarts = new Map<string, number>();
+let peerFlashCounter = 0;
 
-function scheduleGameEnd(gameId: string, duration: number): void {
+async function broadcastSnapshot(gameId: string): Promise<void> {
+    await GameManager.broadcastToGame(gameId, async (client, playerIndex) => {
+        const game = GameManager.getGame(gameId);
+        if (!game) return;
+        const player = game.players[playerIndex];
+        if (!player) return;
+        const snap = GameManager.getSnapshot(gameId, player);
+        if (!snap) return;
+        await client.onGameState(snap);
+    });
+}
+
+function scheduleGameEnd(gameId: string, duration: number, expectedSeq: number): void {
     setTimeout(() => {
         void (async () => {
             const finalGame = GameManager.getGame(gameId);
             if (!finalGame || finalGame.status !== "playing") return;
+            if (finalGame.timerSeqNum !== expectedSeq) return;
+            if (finalGame.gameMode === "cooperative") return;
 
             const allWords = GameManager.getAllWords(gameId);
             const players = GameManager.getPlayerScores(gameId);
@@ -27,6 +42,7 @@ function scheduleGameEnd(gameId: string, duration: number): void {
             await GameManager.broadcastToGame(gameId, async (client) => {
                 await client.onGameEnd(gameId, players, allWords);
             });
+            await broadcastSnapshot(gameId);
 
             if (!GameManager.getGame(gameId)) return;
 
@@ -58,7 +74,7 @@ function scheduleRestart(gameId: string): void {
             if (g.status !== "finished") return;
             if (g.players.length === 0) return;
 
-            await GameManager.startGamePlaying(gameId);
+            const seq = await GameManager.startGamePlaying(gameId);
             const updatedGame = GameManager.getGame(gameId);
             if (!updatedGame) return;
 
@@ -67,10 +83,13 @@ function scheduleRestart(gameId: string): void {
                 await client.onPlayerUpdate(gameId, players, updatedGame.status, playerIndex);
                 await client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
             });
+            await broadcastSnapshot(gameId);
 
             if (!GameManager.getGame(gameId)) return;
 
-            scheduleGameEnd(gameId, updatedGame.gameDuration);
+            if (updatedGame.gameMode !== "cooperative") {
+                scheduleGameEnd(gameId, updatedGame.gameDuration, seq);
+            }
         })();
     }, RESTART_COUNTDOWN_MS);
 }
@@ -94,6 +113,7 @@ function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentif
         GameManager.removePlayerFromGame(gameId, player);
         const game = GameManager.getGame(gameId);
         if (game) {
+            void broadcastSnapshot(gameId);
             const players = GameManager.getPlayerScores(gameId);
             void GameManager.broadcastToGame(gameId, async (playerClient, playerIndex) => {
                 await playerClient.onPlayerUpdate(gameId, players, game.status, playerIndex);
@@ -161,34 +181,15 @@ const serverHandlers = {
         if (game) {
             const players = GameManager.getPlayerScores(sanitized);
             let gameT = game;
-            // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
+            // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update.
             setImmediate(() => {
                 void GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
-                    console.log("onPlayerUpdate", playerClient, playerIndex);
                     await playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
                 });
-
-                void player.onSettingsUpdate(sanitized, gameT.gridWidth, gameT.gridHeight, gameT.gameDuration, gameT.showRemainingWordsPerCell, gameT.showTotalPossibleScore);
+                void broadcastSnapshot(sanitized);
 
                 if (gameT.status === "playing" && gameT.startTime) {
                     void player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
-                }
-
-                if (gameT.status === "waiting" && players.length > 1) {
-                    setTimeout(async () => {
-                        const currentGame = GameManager.getGame(sanitized);
-                        if (currentGame && currentGame.status === "waiting") {
-                            await GameManager.startGamePlaying(sanitized);
-                            const updatedGame = GameManager.getGame(sanitized);
-                            if (updatedGame) {
-                                void GameManager.broadcastToGame(sanitized, async (client) => {
-                                    await client.onGameStart(sanitized, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
-                                });
-
-                                scheduleGameEnd(sanitized, updatedGame.gameDuration);
-                            }
-                        }
-                    }, 1000);
                 }
             });
         }
@@ -206,7 +207,7 @@ const serverHandlers = {
         }
 
         GameManager.validateStartGame(gameId, player);
-        await GameManager.startGamePlaying(gameId);
+        const seq = await GameManager.startGamePlaying(gameId);
         const updatedGame = GameManager.getGame(gameId);
         if (!updatedGame) {
             throw new Error(`Game ${gameId} not found after starting`);
@@ -215,8 +216,11 @@ const serverHandlers = {
         void GameManager.broadcastToGame(gameId, async (client) => {
             await client.onGameStart(gameId, updatedGame.grid, updatedGame.startTime!, updatedGame.gameDuration, updatedGame.totalPossibleWords, updatedGame.totalPossibleScore);
         });
+        void broadcastSnapshot(gameId);
 
-        scheduleGameEnd(gameId, updatedGame.gameDuration);
+        if (updatedGame.gameMode !== "cooperative") {
+            scheduleGameEnd(gameId, updatedGame.gameDuration, seq);
+        }
     },
 
     async submitWord(gameId: string, word: string, cells: { row: number; col: number }[]): Promise<{ points: number }> {
@@ -238,9 +242,28 @@ const serverHandlers = {
 
         const result = await GameManager.submitWord({ gameId, player, word, cells });
         const players = GameManager.getPlayerScores(gameId);
+        const submitterIndex = game.players.indexOf(player);
         void GameManager.broadcastToGame(gameId, async (client, playerIndex) => {
             await client.onPlayerUpdate(gameId, players, game.status, playerIndex);
+            if (game.gameMode === "cooperative") {
+                await client.onCoopWord(gameId, word.toUpperCase(), result.points, submitterIndex, cells);
+            }
         });
+        void broadcastSnapshot(gameId);
+
+        if (game.gameMode === "cooperative") {
+            let totalScore = 0;
+            for (const [, s] of game.scores) totalScore += s;
+            const goal = Math.max(1, Math.ceil(game.totalPossibleScore * game.coopGoalFraction));
+            if (totalScore >= goal && game.status === "playing") {
+                const allWords = GameManager.getAllWords(gameId);
+                const playersForEnd = GameManager.getPlayerScores(gameId);
+                void GameManager.broadcastToGame(gameId, async (client) => {
+                    await client.onGameEnd(gameId, playersForEnd, allWords);
+                });
+                setTimeout(() => GameManager.endGame(gameId), 1000);
+            }
+        }
 
         return result;
     },
@@ -261,20 +284,21 @@ const serverHandlers = {
         scheduleRestart(gameId);
     },
 
-    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean): Promise<void> {
+    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative", coopGoalFraction?: number): Promise<void> {
         const player = getServerSideClient();
         if (!player) {
             throw new Error(`No active caller`);
         }
 
-        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore });
+        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore, gameMode, coopGoalFraction });
         const settings = GameManager.getGameSettings(gameId);
         void GameManager.broadcastToGame(gameId, async (client) => {
-            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore);
+            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore, settings.gameMode, settings.coopGoalFraction);
         });
+        void broadcastSnapshot(gameId);
     },
 
-    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean }> {
+    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative"; coopGoalFraction: number }> {
         return GameManager.getGameSettings(gameId);
     },
 
@@ -339,7 +363,39 @@ const serverHandlers = {
 };
 
 export const clientHandlers = {
+    async onGameState(snapshot: GameManager.GameSnapshot): Promise<void> {
+        if (!gameState.isMultiplayer) return;
+        if (gameState.gameId !== snapshot.gameId) return;
+        gameState.players = snapshot.players;
+        gameState.status = snapshot.status as any;
+        gameState.myPlayerIndex = snapshot.yourPlayerIndex;
+        gameState.gridWidth = snapshot.gridWidth;
+        gameState.gridHeight = snapshot.gridHeight;
+        gameState.gameDuration = snapshot.gameDuration;
+        gameState.gameMode = snapshot.gameMode;
+        gameState.coopGoalFraction = snapshot.coopGoalFraction;
+        gameState.showRemainingWordsPerCell = snapshot.showRemainingWordsPerCell;
+        gameState.showTotalPossibleScore = snapshot.showTotalPossibleScore;
+        gameState.totalPossibleWords = snapshot.totalPossibleWords;
+        gameState.totalPossibleScore = snapshot.totalPossibleScore;
+        if (snapshot.grid && snapshot.grid.length > 0) {
+            gameState.grid = snapshot.grid;
+        }
+        if (snapshot.yourPlayerIndex >= 0 && snapshot.players[snapshot.yourPlayerIndex]) {
+            gameState.score = snapshot.players[snapshot.yourPlayerIndex].score;
+        }
+        if (snapshot.gameMode === "cooperative") {
+            gameState.matchedWords = snapshot.coopMatchedWords.map(w => ({
+                word: w.word,
+                points: w.points,
+                playerIndex: w.playerIndex,
+            }));
+            gameState.matchedWordsSet = new Set(snapshot.coopMatchedWords.map(w => w.word));
+        }
+    },
+
     async onPlayerUpdate(gameId: string, players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
+        if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.players = players;
         gameState.status = status as any;
@@ -350,6 +406,7 @@ export const clientHandlers = {
     },
 
     async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {
+        if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.grid = grid;
         gameState.status = "playing";
@@ -367,6 +424,8 @@ export const clientHandlers = {
         closeGameOverModal();
 
         const updateTimer = () => {
+            if (gameState.gameId !== gameId) return;
+            if (!gameState.isMultiplayer) return;
             if (gameState.status !== "playing") return;
             const elapsed = Date.now() - startTime;
             gameState.timeRemaining = Math.max(0, duration - elapsed);
@@ -380,6 +439,7 @@ export const clientHandlers = {
     },
 
     async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {
+        if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.status = "finished";
         gameState.restartCountdownEnd = 0;
@@ -408,17 +468,22 @@ export const clientHandlers = {
             totalPossibleScore: gameState.totalPossibleScore,
             totalPossibleWords: gameState.totalPossibleWords,
         };
+        const onPlayAgain = () => { pageURL.value = "lobby"; };
+        gameState.lastGameOverState = gameOverState;
+        gameState.lastGameOverOnPlayAgain = onPlayAgain;
         showGameOver(gameOverState, () => {
             pageURL.value = "lobby";
         });
     },
 
     async onRestartCountdown(gameId: string, endTime: number): Promise<void> {
+        if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.restartCountdownEnd = endTime;
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative", coopGoalFraction?: number): Promise<void> {
+        if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         const dimensionsChanged = gameState.gridWidth !== gridWidth || gameState.gridHeight !== gridHeight;
         gameState.gridWidth = gridWidth;
@@ -430,11 +495,29 @@ export const clientHandlers = {
         if (showTotalPossibleScore !== undefined) {
             gameState.showTotalPossibleScore = !!showTotalPossibleScore;
         }
+        if (gameMode !== undefined) {
+            gameState.gameMode = gameMode === "cooperative" ? "cooperative" : "competitive";
+        }
+        if (coopGoalFraction !== undefined) {
+            gameState.coopGoalFraction = Math.max(0.05, Math.min(1, coopGoalFraction));
+        }
         if (gameState.status !== "playing") {
             gameState.timeRemaining = gameDuration;
             if (dimensionsChanged) {
                 await regenerateGridForCurrentSize();
             }
+        }
+    },
+
+    async onCoopWord(gameId: string, word: string, points: number, playerIndex: number, cells?: { row: number; col: number }[]): Promise<void> {
+        if (!gameState.isMultiplayer) return;
+        if (gameState.gameId !== gameId) return;
+        if (!gameState.matchedWordsSet.has(word)) {
+            gameState.matchedWords.push({ word, points, playerIndex });
+            gameState.matchedWordsSet.add(word);
+        }
+        if (cells && cells.length > 0 && playerIndex !== gameState.myPlayerIndex) {
+            gameState.peerFlashRequest = { id: ++peerFlashCounter, cells: cells.slice(), playerIndex };
         }
     },
 
@@ -460,6 +543,9 @@ export const clientHandlers = {
 export type ClientHandlers = typeof clientHandlers;
 
 const clientHandlersNoOp: ClientHandlers = {
+    async onGameState(snapshot: GameManager.GameSnapshot): Promise<void> {
+    },
+
     async onPlayerUpdate(gameId: string, players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
     },
 
@@ -469,7 +555,10 @@ const clientHandlersNoOp: ClientHandlers = {
     async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative", coopGoalFraction?: number): Promise<void> {
+    },
+
+    async onCoopWord(gameId: string, word: string, points: number, playerIndex: number, cells?: { row: number; col: number }[]): Promise<void> {
     },
 
     async onRestartCountdown(gameId: string, endTime: number): Promise<void> {

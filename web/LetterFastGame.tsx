@@ -27,6 +27,7 @@ import {
 import { getRPCClient, resetRPCClient } from "./rpcClient";
 import { getSavedConfigOrDefaults, loadSavedConfig, saveConfig } from "./GameConfig";
 import { ConnectionManager } from "./ConnectionManager";
+import { showGameOver } from "./GameOver";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
@@ -36,6 +37,15 @@ const WRONG_WORD_TIMEOUT_INCREMENT = 100;
 const MAX_WRONG_WORD_TIMEOUT = 3000;
 const CANCEL_ZONE_SIZE = 80;
 const TIMEOUT_FADEOUT_DURATION = 300;
+const PEER_FLASH_STAGGER_MS = 100;
+const PEER_FLASH_DURATION_MS = 500;
+
+function randomGameCode(): string {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let s = "";
+    for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+}
 
 const MARGIN_EMPTY_SIDE = 10;
 const BOTTOM_HEIGHT_FRACTION = 0.2;
@@ -181,16 +191,37 @@ export class LetterFastGame extends preact.Component {
         cfgWidth: 4,
         cfgHeight: 4,
         cfgDuration: 90000,
+        cfgDurationStr: "90",
         cfgShowRemaining: false,
         cfgShowTotal: false,
-        joinGameId: "",
+        cfgGameMode: "competitive" as "competitive" | "cooperative",
+        cfgCoopGoalPct: 50,
+        joinGameId: randomGameCode(),
         joining: false,
         menuError: undefined as string | undefined,
+        joinPopupOpen: false,
+        joinPopupBackdropDown: false,
+        menuBackdropDown: false,
+        peerFlashCells: [] as { row: number; col: number; id: number }[],
     });
 
     connectionManager: ConnectionManager | undefined;
     reconnectCountdownInterval: number | undefined;
     gridSizeReactionDisposer: IReactionDisposer | undefined;
+    peerFlashReactionDisposer: IReactionDisposer | undefined;
+    peerFlashIdSeq = 0;
+
+    runPeerFlash = (cells: { row: number; col: number }[]) => {
+        cells.forEach((cell, i) => {
+            const id = ++this.peerFlashIdSeq;
+            setTimeout(() => {
+                this.synced.peerFlashCells.push({ row: cell.row, col: cell.col, id });
+                setTimeout(() => {
+                    this.synced.peerFlashCells = this.synced.peerFlashCells.filter(c => c.id !== id);
+                }, PEER_FLASH_DURATION_MS);
+            }, i * PEER_FLASH_STAGGER_MS);
+        });
+    };
 
     preventGlobalTouch = (e: TouchEvent) => {
         if (e.touches.length > 1) {
@@ -261,26 +292,29 @@ export class LetterFastGame extends preact.Component {
             const defaults = getSavedConfigOrDefaults();
             const rpc = getRPCClient();
 
+            const code = (this.synced.joinGameId || randomGameCode()).toUpperCase();
             this.connectionManager = new ConnectionManager({
                 connect: async () => {
                     resetRPCClient();
                     const newRpc = getRPCClient();
-                    const { gameId } = await newRpc.createGame(16);
-                    gameState.gameId = gameId;
+                    await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration);
+                    gameState.gameId = code;
                     gameState.isMultiplayer = true;
 
-                    await newRpc.updateGameSettings(
-                        gameId,
+                    await (newRpc as any).updateGameSettings(
+                        code,
                         gameState.gridWidth,
                         gameState.gridHeight,
                         gameState.gameDuration,
                         gameState.showRemainingWordsPerCell,
-                        gameState.showTotalPossibleScore
+                        gameState.showTotalPossibleScore,
+                        gameState.gameMode,
+                        gameState.coopGoalFraction,
                     );
 
-                    joinGameIdURL.value = gameId;
+                    joinGameIdURL.value = code;
 
-                    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${gameId}`;
+                    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
                     window.history.pushState({}, "", newUrl);
                 },
                 disconnect: () => {
@@ -395,19 +429,49 @@ export class LetterFastGame extends preact.Component {
         window.history.pushState({}, "", newUrl);
     };
 
-    copyShareLink = async () => {
-        if (!gameState.gameId) return;
-
+    copyTextToClipboard = (text: string): boolean => {
         try {
-            const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${gameState.gameId}`;
-            await navigator.clipboard.writeText(shareUrl);
-            this.synced.linkCopied = true;
-            setTimeout(() => {
-                this.synced.linkCopied = false;
-            }, 2000);
-        } catch (error) {
-            console.error("Failed to copy link:", error);
+            if (navigator.clipboard && (window.isSecureContext || location.hostname === "localhost")) {
+                void navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch { /* fall through to textarea fallback */ }
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.readOnly = true;
+            ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, text.length);
+            const ok = document.execCommand("copy");
+            document.body.removeChild(ta);
+            return ok;
+        } catch (e) {
+            console.error("Clipboard copy failed:", e);
+            return false;
         }
+    };
+
+    flashCopied = () => {
+        this.synced.linkCopied = true;
+        setTimeout(() => { this.synced.linkCopied = false; }, 2000);
+    };
+
+    copyShareLink = () => {
+        if (!gameState.gameId) return;
+        const shareUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${gameState.gameId}`;
+        if (this.copyTextToClipboard(shareUrl)) this.flashCopied();
+    };
+
+    buildShareUrl = (code: string): string => {
+        return `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
+    };
+
+    copyGameCode = () => {
+        if (!gameState.gameId) return;
+        if (this.copyTextToClipboard(this.buildShareUrl(gameState.gameId))) this.flashCopied();
     };
 
     startReconnectCountdown = () => {
@@ -485,11 +549,18 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgDuration = saved.gameDuration;
             this.synced.cfgShowRemaining = !!saved.showRemainingWordsPerCell;
             this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
+            this.synced.cfgGameMode = saved.gameMode === "cooperative" ? "cooperative" : "competitive";
+            this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? 0.5) * 100);
         } else {
             this.synced.cfgWidth = gameState.gridWidth;
             this.synced.cfgHeight = gameState.gridHeight;
             this.synced.cfgDuration = gameState.gameDuration;
         }
+        this.synced.cfgDurationStr = String(Math.round(this.synced.cfgDuration / 1000));
+        applySettings({
+            gameMode: this.synced.cfgGameMode,
+            coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
+        });
     };
 
     saveMenuConfig = () => {
@@ -499,22 +570,28 @@ export class LetterFastGame extends preact.Component {
             gameDuration: this.synced.cfgDuration,
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
             showTotalPossibleScore: this.synced.cfgShowTotal,
+            gameMode: this.synced.cfgGameMode,
+            coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
         });
         applySettings({
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
             showTotalPossibleScore: this.synced.cfgShowTotal,
+            gameMode: this.synced.cfgGameMode,
+            coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
         });
         if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
             void (async () => {
                 try {
                     const rpc = getRPCClient();
-                    await rpc.updateGameSettings(
+                    await (rpc as any).updateGameSettings(
                         gameState.gameId!,
                         this.synced.cfgWidth,
                         this.synced.cfgHeight,
                         this.synced.cfgDuration,
                         this.synced.cfgShowRemaining,
                         this.synced.cfgShowTotal,
+                        this.synced.cfgGameMode,
+                        this.synced.cfgCoopGoalPct / 100,
                     );
                 } catch (error) {
                     console.error("Failed to push settings to server:", error);
@@ -555,12 +632,24 @@ export class LetterFastGame extends preact.Component {
 
     async componentDidMount() {
         this.loadMenuConfig();
+        const urlCode = joinGameIdURL.value;
+        if (urlCode) {
+            this.synced.joinGameId = urlCode.toUpperCase();
+        }
         if (!isNode()) {
             this.calculateScale();
 
             this.gridSizeReactionDisposer = reaction(
                 () => [gameState.gridWidth, gameState.gridHeight],
                 () => this.calculateScale(),
+            );
+
+            this.peerFlashReactionDisposer = reaction(
+                () => gameState.peerFlashRequest?.id,
+                () => {
+                    const req = gameState.peerFlashRequest;
+                    if (req && req.cells.length > 0) this.runPeerFlash(req.cells);
+                },
             );
 
             window.addEventListener("keydown", this.onKeyDown);
@@ -673,6 +762,10 @@ export class LetterFastGame extends preact.Component {
             this.gridSizeReactionDisposer();
             this.gridSizeReactionDisposer = undefined;
         }
+        if (this.peerFlashReactionDisposer) {
+            this.peerFlashReactionDisposer();
+            this.peerFlashReactionDisposer = undefined;
+        }
         if (this.connectionManager) {
             this.connectionManager.cleanup();
             this.connectionManager = undefined;
@@ -742,7 +835,19 @@ export class LetterFastGame extends preact.Component {
     }
 
     handleSelectionStart = async (pos: { x: number; y: number }) => {
-        if (gameState.status === "ready") {
+        if (gameState.isMultiplayer) {
+            if (gameState.status !== "playing"
+                && gameState.gameId
+                && gameState.myPlayerIndex === 0
+            ) {
+                try {
+                    const rpc = getRPCClient();
+                    await rpc.startGame(gameState.gameId);
+                } catch (error) {
+                    console.error("Failed to start multiplayer game:", error);
+                }
+            }
+        } else if (gameState.status === "ready") {
             await startGame(false);
             this.synced.selectedCells = [];
             this.synced.pulseCells = [];
@@ -874,8 +979,16 @@ export class LetterFastGame extends preact.Component {
                 const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), this.synced.selectedCells);
                 if (result.points > 0) {
                     const upperWord = word.toUpperCase();
-                    gameState.matchedWords.push({ word: upperWord, points: result.points });
-                    gameState.matchedWordsSet.add(upperWord);
+                    if (gameState.gameMode === "cooperative") {
+                        // server's onCoopWord broadcast attributes & adds globally; just feedback here
+                        if (!gameState.matchedWordsSet.has(upperWord)) {
+                            gameState.matchedWords.push({ word: upperWord, points: result.points, playerIndex: gameState.myPlayerIndex });
+                            gameState.matchedWordsSet.add(upperWord);
+                        }
+                    } else {
+                        gameState.matchedWords.push({ word: upperWord, points: result.points });
+                        gameState.matchedWordsSet.add(upperWord);
+                    }
                     this.showWordAcceptedFeedback(result.points);
                 }
             }
@@ -974,16 +1087,24 @@ export class LetterFastGame extends preact.Component {
     };
 
     renderTimeAndScore(timeBarHue: number, timePercent: number) {
+        const isCoop = gameState.gameMode === "cooperative";
+        const totalScore = isCoop && gameState.isMultiplayer
+            ? gameState.players.reduce((s, p) => s + p.score, 0)
+            : gameState.score;
+        const goalPoints = isCoop ? Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction)) : 0;
+        const goalPct = isCoop && goalPoints > 0 ? Math.min(100, (totalScore / goalPoints) * 100) : 0;
         return (
             <div className={css.hbox(10).alignItems("center").fillWidth}>
                 <div className={css.vbox(4)}>
                     <div className={css.fontSize(28).width(90).textAlign("center")}>
-                        {formatTime(gameState.timeRemaining)}
+                        {isCoop ? formatTime(gameState.elapsedTime) : formatTime(gameState.timeRemaining)}
                     </div>
                     <div className={css.width(90).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
                         <div
-                            className={css.absolute.pos(0, 0).height(4).hsl(timeBarHue, 70, 50).borderRadius(2) + ""}
-                            style={{ width: `${timePercent}%`, transition: "width 0.1s linear" }}
+                            className={css.absolute.pos(0, 0).height(4).borderRadius(2) +
+                                (isCoop ? css.hsl(200, 70, 50) : css.hsl(timeBarHue, 70, 50))
+                            }
+                            style={{ width: `${isCoop ? goalPct : timePercent}%`, transition: "width 0.1s linear" }}
                         />
                     </div>
                 </div>
@@ -993,9 +1114,14 @@ export class LetterFastGame extends preact.Component {
                 }
                     style={{ border: "1px solid rgba(255,255,255,0.15)" }}
                 >
-                    <span className={css.fontSize(20)}>🏆</span>
-                    <span className={css.fontSize(20).fontWeight("bold")}>{gameState.score}</span>
-                    {gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (
+                    <span className={css.fontSize(20)}>{isCoop ? "🤝" : "🏆"}</span>
+                    <span className={css.fontSize(20).fontWeight("bold")}>{totalScore}</span>
+                    {isCoop && goalPoints > 0 && (
+                        <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                            / {goalPoints}
+                        </span>
+                    )}
+                    {!isCoop && gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (
                         <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
                             / {gameState.totalPossibleScore}
                         </span>
@@ -1010,11 +1136,52 @@ export class LetterFastGame extends preact.Component {
                         </div>
                     ))}
                 </div>
+                {gameState.isMultiplayer && gameState.gameId && (
+                    <button
+                        onClick={this.copyGameCode}
+                        title="Tap to copy game code"
+                        className={css.hbox(4).alignItems("center")
+                            .pad2(4, 8).borderRadius(6)
+                            .hsl(240, 30, 18).colorhsl(0, 0, 100)
+                            .fontFamily("monospace").fontSize(13).fontWeight("bold")
+                            .letterSpacing("1px").cursor("pointer")
+                            + ""}
+                        style={{ marginLeft: "auto", border: "1px dashed rgba(255,255,255,0.3)" }}
+                    >
+                        <span className={css.fontSize(10).colorhsl(0, 0, 70).letterSpacing("0px") + ""}>
+                            {this.synced.linkCopied ? "✓" : "📋"}
+                        </span>
+                        <span>{this.synced.linkCopied ? "COPIED" : gameState.gameId}</span>
+                    </button>
+                )}
+                <button
+                    onClick={() => {
+                        this.synced.joinPopupOpen = true;
+                        this.synced.menuError = undefined;
+                    }}
+                    title="Join a game"
+                    className={css.fontSize(20).pad2(4, 8) + ""}
+                    style={{ marginLeft: gameState.isMultiplayer && gameState.gameId ? "0" : "auto" }}
+                >
+                    👥
+                </button>
+                {gameState.lastGameOverState && (
+                    <button
+                        onClick={() => {
+                            const s = gameState.lastGameOverState;
+                            const cb = gameState.lastGameOverOnPlayAgain || (() => {});
+                            if (s) showGameOver(s, cb);
+                        }}
+                        title="Show last game summary"
+                        className={css.fontSize(20).pad2(4, 8) + ""}
+                    >
+                        📊
+                    </button>
+                )}
                 <button
                     onClick={() => { this.synced.menuOpen = !this.synced.menuOpen; }}
                     title="Menu"
                     className={css.fontSize(24).pad2(4, 10) + ""}
-                    style={{ marginLeft: "auto" }}
                 >
                     ☰
                 </button>
@@ -1036,8 +1203,10 @@ export class LetterFastGame extends preact.Component {
                 {gameState.players.map((p, index) => {
                     const letter = String.fromCharCode(65 + index);
                     const isYou = index === gameState.myPlayerIndex;
+                    const isHost = index === 0;
                     return (
                         <div key={p.id} className={css.hbox(3).alignItems("center").fontSize(14)}>
+                            {isHost && <span title="Host">👑</span>}
                             {isYou && <span title="You">👤</span>}
                             <span className={css.fontWeight("bold") + ""}>{letter}</span>
                             <span>{p.score}</span>
@@ -1086,57 +1255,57 @@ export class LetterFastGame extends preact.Component {
 
     renderMenuButtons() {
         const btn = css.fontSize(13).pad2(6, 10).fillWidth.textAlign("left") + "";
-        const startLabel = gameState.status === "ready" && "▶️ Start Game"
-            || gameState.status === "playing" && "▶️ Restart"
-            || "▶️ Play Again";
         const closeAfter = (fn: () => unknown | Promise<unknown>) => async () => {
             this.synced.menuOpen = false;
             await fn();
         };
+        const startSingleplayer = async () => {
+            if (gameState.isMultiplayer) this.leaveMultiplayer();
+            await startGame();
+        };
+        const startMultiplayer = async () => {
+            if (!gameState.isMultiplayer) {
+                await this.convertToMultiplayer();
+                await new Promise(r => setTimeout(r, 250));
+            }
+            if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
+                try {
+                    const rpc = getRPCClient();
+                    await (rpc as any).updateGameSettings(
+                        gameState.gameId,
+                        this.synced.cfgWidth,
+                        this.synced.cfgHeight,
+                        this.synced.cfgDuration,
+                        this.synced.cfgShowRemaining,
+                        this.synced.cfgShowTotal,
+                        this.synced.cfgGameMode,
+                        this.synced.cfgCoopGoalPct / 100,
+                    );
+                    await rpc.startGame(gameState.gameId);
+                } catch (error) {
+                    console.error("Failed to start multiplayer game:", error);
+                }
+            }
+        };
+        const inMpAsNonHost = gameState.isMultiplayer && gameState.myPlayerIndex !== 0;
+        const mpDisabled = this.synced.isConverting || inMpAsNonHost;
         return (
             <>
-                {!gameState.isMultiplayer && (
-                    <button onClick={closeAfter(() => startGame())} className={btn}>
-                        {startLabel}
-                    </button>
-                )}
+                <button onClick={closeAfter(startSingleplayer)} className={btn}>
+                    ▶️ Start Singleplayer
+                </button>
+                <button
+                    onClick={closeAfter(startMultiplayer)}
+                    disabled={mpDisabled}
+                    title={inMpAsNonHost ? "Only the host can start the game" : undefined}
+                    className={btn}
+                >
+                    {this.synced.isConverting && "👥 Starting…" || "👥 Start Multiplayer"}
+                </button>
                 {gameState.status === "playing" && !gameState.isMultiplayer && (
                     <button onClick={closeAfter(() => endGame())} className={btn}>
                         ⏹️ End Now
                     </button>
-                )}
-                {!gameState.isMultiplayer && (
-                    <button
-                        onClick={closeAfter(() => this.convertToMultiplayer())}
-                        disabled={this.synced.isConverting}
-                        className={btn}
-                    >
-                        {this.synced.isConverting && "👥 Converting…" || "👥 Convert to Multiplayer"}
-                    </button>
-                )}
-                {!gameState.isMultiplayer && (
-                    <button
-                        onClick={closeAfter(() => this.enterTestMode())}
-                        className={btn}
-                    >
-                        🧪 Test Mode
-                    </button>
-                )}
-                {gameState.isMultiplayer && (
-                    <>
-                        <button
-                            onClick={this.copyShareLink}
-                            className={css.hsl(120, 60, 40).fontSize(16).pad2(10, 14).fillWidth.textAlign("left") + ""}
-                        >
-                            {this.synced.linkCopied && "✓ Copied!" || "🔗 Copy Link"}
-                        </button>
-                        <button
-                            onClick={closeAfter(() => this.leaveMultiplayer())}
-                            className={css.hsl(0, 60, 40).fontSize(16).pad2(10, 14).fillWidth.textAlign("left") + ""}
-                        >
-                            🚪 Leave Multiplayer
-                        </button>
-                    </>
                 )}
             </>
         );
@@ -1173,6 +1342,7 @@ export class LetterFastGame extends preact.Component {
                             row.map((cell, ci) => {
                                 let isSelected = this.isCellSelected(ri, ci);
                                 let isPulsing = this.isCellPulsing(ri, ci);
+                                let isPeerFlashing = this.synced.peerFlashCells.some(c => c.row === ri && c.col === ci);
                                 let isExhausted = !this.isCellExhausted(ri, ci);
                                 return (
                                     <div
@@ -1202,6 +1372,17 @@ export class LetterFastGame extends preact.Component {
                                                 style={{
                                                     border: "2px solid rgba(255, 255, 255, 0.6)",
                                                     backgroundColor: "transparent"
+                                                }}
+                                            />
+                                        )}
+                                        {isPeerFlashing && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                    + " peer-flash-cell"}
+                                                style={{
+                                                    background: "rgba(120, 200, 255, 0.5)",
+                                                    border: "3px solid rgba(120, 200, 255, 0.95)",
                                                 }}
                                             />
                                         )}
@@ -1306,17 +1487,117 @@ export class LetterFastGame extends preact.Component {
         );
     }
 
+    renderJoinPopup() {
+        if (!this.synced.joinPopupOpen) return undefined;
+        return (
+            <div
+                className={css.absolute.pos(0, 0).fillBoth.hsla(0, 0, 0, 0.6)
+                    .hbox(0).justifyContent("center").alignItems("center")
+                }
+                style={{ zIndex: 200 }}
+                onMouseDown={(e) => {
+                    if (e.target === e.currentTarget) this.synced.joinPopupBackdropDown = true;
+                }}
+                onMouseUp={(e) => {
+                    if (e.target === e.currentTarget && this.synced.joinPopupBackdropDown) {
+                        this.synced.joinPopupOpen = false;
+                    }
+                    this.synced.joinPopupBackdropDown = false;
+                }}
+                onTouchStart={(e) => {
+                    if (e.target === e.currentTarget) this.synced.joinPopupBackdropDown = true;
+                }}
+                onTouchEnd={(e) => {
+                    if (e.target === e.currentTarget && this.synced.joinPopupBackdropDown) {
+                        this.synced.joinPopupOpen = false;
+                    }
+                    this.synced.joinPopupBackdropDown = false;
+                }}
+            >
+                <div
+                    className={css.vbox(10).pad2(16).borderRadius(10)
+                        .hsl(240, 30, 12).colorhsl(0, 0, 100)
+                    }
+                    style={{ width: "min(280px, 90vw)", boxShadow: "0 4px 20px rgba(0,0,0,0.5)" }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className={css.fontSize(14).fontWeight("bold")}>Join game</div>
+                    <input
+                        type="text"
+                        autoFocus
+                        placeholder="Game code"
+                        value={this.synced.joinGameId}
+                        onInput={(e) => { this.synced.joinGameId = e.currentTarget.value; }}
+                        onKeyDown={async (e) => {
+                            if (e.key === "Enter") {
+                                await this.onJoinGameFromMenu();
+                                this.synced.joinPopupOpen = false;
+                            } else if (e.key === "Escape") {
+                                this.synced.joinPopupOpen = false;
+                            }
+                        }}
+                        className={css.fontSize(16).pad2(8, 10).textTransform("uppercase").fillWidth + ""}
+                    />
+                    <div className={css.hbox(8).justifyContent("end")}>
+                        <button
+                            onClick={() => { this.synced.joinPopupOpen = false; }}
+                            className={css.fontSize(13).pad2(6, 10) + ""}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={async () => {
+                                await this.onJoinGameFromMenu();
+                                this.synced.joinPopupOpen = false;
+                            }}
+                            disabled={this.synced.joining}
+                            className={css.fontSize(13).pad2(6, 10) + ""}
+                        >
+                            {this.synced.joining ? "Joining…" : "Join"}
+                        </button>
+                    </div>
+                    {this.synced.menuError && (
+                        <div className={css.colorhsl(0, 70, 60).fontSize(12).pad2(6, 8).borderRadius(6).hsl(0, 30, 20)}>
+                            {this.synced.menuError}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     renderMenu() {
         if (!this.synced.menuOpen) return undefined;
         const inputCls = css.fontSize(13).pad2(4, 6).width(48) + "";
         const sectionTitle = css.fontSize(12).fontWeight("bold").colorhsl(0, 0, 70) + "";
+        const inMP = gameState.isMultiplayer && !!gameState.gameId;
+        const isHost = !inMP || gameState.myPlayerIndex === 0;
+        const hostOnlyTitle = !isHost ? "Only the host can change this" : undefined;
+        const hostOnlySuffix = inMP && !isHost ? " (host only)" : "";
         return (
             <div
                 className={css.absolute.pos(0, 0).fillBoth.hsla(0, 0, 0, 0.6)
                     .hbox(0).justifyContent("end")
                 }
                 style={{ zIndex: 100 }}
-                onClick={() => { this.synced.menuOpen = false; }}
+                onMouseDown={(e) => {
+                    if (e.target === e.currentTarget) this.synced.menuBackdropDown = true;
+                }}
+                onMouseUp={(e) => {
+                    if (e.target === e.currentTarget && this.synced.menuBackdropDown) {
+                        this.synced.menuOpen = false;
+                    }
+                    this.synced.menuBackdropDown = false;
+                }}
+                onTouchStart={(e) => {
+                    if (e.target === e.currentTarget) this.synced.menuBackdropDown = true;
+                }}
+                onTouchEnd={(e) => {
+                    if (e.target === e.currentTarget && this.synced.menuBackdropDown) {
+                        this.synced.menuOpen = false;
+                    }
+                    this.synced.menuBackdropDown = false;
+                }}
             >
                 <div
                     className={css.vbox(8).pad2(10).overflowAuto
@@ -1339,58 +1620,54 @@ export class LetterFastGame extends preact.Component {
                         </button>
                     </div>
 
-                    {!gameState.isMultiplayer && (
-                        <div className={css.hbox(6).alignItems("center")}>
-                            <input
-                                type="text"
-                                placeholder="Game ID"
-                                value={this.synced.joinGameId}
-                                onInput={(e) => {
-                                    this.synced.joinGameId = e.currentTarget.value;
-                                }}
-                                onKeyDown={async (e) => {
-                                    if (e.key === "Enter") {
-                                        await this.onJoinGameFromMenu();
-                                    }
-                                }}
-                                className={css.fontSize(13).pad2(4, 6).textTransform("uppercase").flexGrow(1).minWidth(0) + ""}
-                            />
-                            <button
-                                onClick={this.onJoinGameFromMenu}
-                                disabled={this.synced.joining}
-                                className={css.fontSize(13).pad2(4, 8) + ""}
-                            >
-                                {this.synced.joining && "…" || "Join"}
-                            </button>
-                        </div>
-                    )}
-
-                    {gameState.isMultiplayer && gameState.gameId && (
-                        <div className={css.vbox(2)
-                            .pad2(6, 8).borderRadius(6)
-                            .hsl(240, 30, 18)
-                        }>
-                            <div className={css.fontSize(10).colorhsl(0, 0, 70)}>Game Code</div>
-                            <div className={css.fontSize(18).fontWeight("bold").fontFamily("monospace")
-                                .letterSpacing("2px")
-                            }>
-                                {gameState.gameId}
-                            </div>
-                        </div>
-                    )}
+                    <div className={css.hbox(6).alignItems("center")}>
+                        <input
+                            type="text"
+                            placeholder="Game ID"
+                            value={this.synced.joinGameId}
+                            onInput={(e) => {
+                                this.synced.joinGameId = e.currentTarget.value;
+                            }}
+                            onKeyDown={async (e) => {
+                                if (e.key === "Enter") {
+                                    await this.onJoinGameFromMenu();
+                                }
+                            }}
+                            className={css.fontSize(13).pad2(4, 6).textTransform("uppercase").flexGrow(1).minWidth(0) + ""}
+                        />
+                        <button
+                            onClick={() => {
+                                const code = (this.synced.joinGameId || "").toUpperCase();
+                                if (code && this.copyTextToClipboard(this.buildShareUrl(code))) this.flashCopied();
+                            }}
+                            title="Copy code"
+                            className={css.fontSize(13).pad2(4, 8) + ""}
+                        >
+                            {this.synced.linkCopied ? "✓" : "📋"}
+                        </button>
+                        <button
+                            onClick={this.onJoinGameFromMenu}
+                            disabled={this.synced.joining}
+                            className={css.fontSize(13).pad2(4, 8) + ""}
+                        >
+                            {this.synced.joining && "…" || "Join"}
+                        </button>
+                    </div>
 
                     <div className={css.vbox(4)}>
                         {this.renderMenuButtons()}
                     </div>
 
                     <div className={css.vbox(4)}>
-                        <div className={sectionTitle}>Grid Size (2-10)</div>
+                        <div className={sectionTitle}>Grid Size (2-10){hostOnlySuffix}</div>
                         <div className={css.hbox(6).alignItems("center")}>
                             <input
                                 type="number"
                                 min="2"
                                 max="10"
                                 value={this.synced.cfgWidth}
+                                disabled={!isHost}
+                                title={hostOnlyTitle}
                                 onInput={(e) => {
                                     const v = parseInt(e.currentTarget.value, 10);
                                     if (!isNaN(v)) {
@@ -1406,6 +1683,8 @@ export class LetterFastGame extends preact.Component {
                                 min="2"
                                 max="10"
                                 value={this.synced.cfgHeight}
+                                disabled={!isHost}
+                                title={hostOnlyTitle}
                                 onInput={(e) => {
                                     const v = parseInt(e.currentTarget.value, 10);
                                     if (!isNaN(v)) {
@@ -1415,32 +1694,80 @@ export class LetterFastGame extends preact.Component {
                                 }}
                                 className={inputCls}
                             />
-                            <button
-                                onClick={async () => await this.applyConfigAndStart()}
-                                className={css.fontSize(12).pad2(4, 8) + ""}
-                            >
-                                Start
-                            </button>
                         </div>
                     </div>
 
-                    <div className={css.vbox(4)}>
-                        <div className={sectionTitle}>Duration (s)</div>
-                        <input
-                            type="number"
-                            min="10"
-                            max="3600"
-                            value={Math.round(this.synced.cfgDuration / 1000)}
-                            onInput={(e) => {
-                                const v = parseInt(e.currentTarget.value, 10);
-                                if (!isNaN(v) && v >= 10 && v <= 3600) {
-                                    this.synced.cfgDuration = v * 1000;
-                                    this.saveMenuConfig();
-                                }
-                            }}
-                            className={css.fontSize(13).pad2(4, 6).width(72) + ""}
-                        />
-                    </div>
+                    {(() => {
+                        const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const mode = inMultiplayer ? gameState.gameMode : this.synced.cfgGameMode;
+                        return (
+                            <div className={css.vbox(4)}>
+                                <div className={sectionTitle}>Mode{inMultiplayer && !isHost ? " (host only)" : ""}</div>
+                                <select
+                                    value={mode}
+                                    disabled={!isHost}
+                                    title={!isHost ? "Only the host can change this" : undefined}
+                                    onChange={(e) => {
+                                        this.synced.cfgGameMode = e.currentTarget.value as any;
+                                        this.saveMenuConfig();
+                                    }}
+                                    className={css.fontSize(13).pad2(4, 6).fillWidth + ""}
+                                >
+                                    <option value="competitive">Competitive (race)</option>
+                                    <option value="cooperative">Cooperative (shared)</option>
+                                </select>
+                            </div>
+                        );
+                    })()}
+
+                    {((gameState.isMultiplayer ? gameState.gameMode : this.synced.cfgGameMode) === "cooperative") ? (
+                        <div className={css.vbox(4)}>
+                            <div className={sectionTitle}>Coop Goal (% of points){hostOnlySuffix}</div>
+                            <input
+                                type="number"
+                                min="5"
+                                max="100"
+                                value={this.synced.cfgCoopGoalPct}
+                                disabled={!isHost}
+                                title={hostOnlyTitle}
+                                onInput={(e) => {
+                                    const v = parseInt(e.currentTarget.value, 10);
+                                    if (!isNaN(v) && v >= 5 && v <= 100) {
+                                        this.synced.cfgCoopGoalPct = v;
+                                        this.saveMenuConfig();
+                                    }
+                                }}
+                                className={css.fontSize(13).pad2(4, 6).width(72) + ""}
+                            />
+                        </div>
+                    ) : (
+                        <div className={css.vbox(4)}>
+                            <div className={sectionTitle}>Duration (s){hostOnlySuffix}</div>
+                            <input
+                                type="number"
+                                min="10"
+                                max="3600"
+                                value={this.synced.cfgDurationStr}
+                                disabled={!isHost}
+                                title={hostOnlyTitle}
+                                onInput={(e) => { this.synced.cfgDurationStr = e.currentTarget.value; }}
+                                onBlur={() => {
+                                    const v = parseInt(this.synced.cfgDurationStr, 10);
+                                    const clamped = isNaN(v) ? Math.round(this.synced.cfgDuration / 1000) : Math.max(10, Math.min(3600, v));
+                                    this.synced.cfgDurationStr = String(clamped);
+                                    if (clamped * 1000 !== this.synced.cfgDuration) {
+                                        this.synced.cfgDuration = clamped * 1000;
+                                        this.saveMenuConfig();
+                                    }
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+                                }}
+                                className={css.fontSize(13).pad2(4, 6).width(72) + ""}
+                            />
+                        </div>
+                    )}
 
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
@@ -1450,7 +1777,10 @@ export class LetterFastGame extends preact.Component {
                         return (
                             <div className={css.vbox(4)}>
                                 <div className={sectionTitle}>Display{inMultiplayer && !isHost ? " (host only)" : ""}</div>
-                                <label className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                <label
+                                    title={!isHost ? "Only the host can change this" : undefined}
+                                    className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}
+                                >
                                     <input
                                         type="checkbox"
                                         checked={showRem}
@@ -1462,7 +1792,10 @@ export class LetterFastGame extends preact.Component {
                                     />
                                     <span>Remaining words per tile</span>
                                 </label>
-                                <label className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                <label
+                                    title={!isHost ? "Only the host can change this" : undefined}
+                                    className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}
+                                >
                                     <input
                                         type="checkbox"
                                         checked={showTot}
@@ -1489,19 +1822,35 @@ export class LetterFastGame extends preact.Component {
     }
 
     renderMatchedWords() {
+        const showPrefix = gameState.gameMode === "cooperative" && gameState.isMultiplayer;
         return (
             <div className={css.vbox(6).overflowAuto.fillBoth
                 .hsl(240, 30, 15).borderRadius(8).pad2(12)
                 .colorhsl(0, 0, 100)
             }>
-                {gameState.matchedWords.slice().reverse().map((w, i) => (
-                    <div key={i} className={css.hbox(8).fontSize(18)}>
-                        <span>{w.word}</span>
-                        <span className={css.fontSize(14).opacity(0.7)}>
-                            {w.points}
-                        </span>
-                    </div>
-                ))}
+                {gameState.matchedWords.slice().reverse().map((w, i) => {
+                    const letter = typeof w.playerIndex === "number"
+                        ? String.fromCharCode(65 + w.playerIndex)
+                        : undefined;
+                    const isYou = typeof w.playerIndex === "number"
+                        && w.playerIndex === gameState.myPlayerIndex;
+                    return (
+                        <div key={i} className={css.hbox(8).fontSize(18).alignItems("center")}>
+                            {showPrefix && letter && (
+                                <span className={css.fontSize(13).fontWeight("bold")
+                                    .pad2(1, 5).borderRadius(4)
+                                    + (isYou ? css.hsl(120, 50, 35) : css.hsl(240, 20, 30))
+                                }>
+                                    {letter}
+                                </span>
+                            )}
+                            <span>{w.word}</span>
+                            <span className={css.fontSize(14).opacity(0.7)}>
+                                {w.points}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
         );
     }
@@ -1525,6 +1874,7 @@ export class LetterFastGame extends preact.Component {
                 }}
             >
                 {this.renderMenu()}
+                {this.renderJoinPopup()}
                 <style>{`
                     @keyframes pulseOut {
                         0% { 
@@ -1555,6 +1905,15 @@ export class LetterFastGame extends preact.Component {
                     }
                     .timeout-fadeout {
                         animation: fadeOut ${TIMEOUT_FADEOUT_DURATION}ms ease-out forwards;
+                    }
+                    @keyframes peerFlash {
+                        0% { opacity: 0; }
+                        20% { opacity: 1; }
+                        100% { opacity: 0; }
+                    }
+                    .peer-flash-cell {
+                        animation: peerFlash ${PEER_FLASH_DURATION_MS}ms ease-out;
+                        pointer-events: none;
                     }
                 `}</style>
                 <div className={css.fillBoth.vbox(SECTION_GAP).alignItems("center")}>

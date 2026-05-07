@@ -15,6 +15,11 @@ export function getRPCClient(): ReturnType<typeof getClient> {
             protocol = "ws";
             host = "localhost";
         }
+        if (host === "letterquick.com" || host.endsWith(".letterquick.com")) {
+            if (!host.startsWith("multiplayer.")) {
+                host = "multiplayer.letterquick.com";
+            }
+        }
         const wsUrl = `${protocol}://${host}:7276`;
         rpcClientInstance = getClient(wsUrl, clientHandlers as any);
     }
