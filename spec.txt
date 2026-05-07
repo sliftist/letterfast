@@ -1,3 +1,12 @@
+
+
+
+Cooperative mode
+    Goal percentage
+    Show words other people got with some kind of animation
+Competitive mode
+Allow viewing past words
+
 Fix multiplayer on cloudflare
     - It's not working, I assume we need to make the port not use cloudflare?
 

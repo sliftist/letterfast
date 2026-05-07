@@ -20,7 +20,7 @@ async function fetchWords(): Promise<string[]> {
 }
 
 async function fetchWordsBrowser(): Promise<string[]> {
-    if (window.location.protocol === "file:") {
+    if (window.location.protocol === "file:" || window.location.hostname === "localhost") {
         return fetchWordsFromGeneratedJS();
     }
 

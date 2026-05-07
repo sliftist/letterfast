@@ -3,7 +3,6 @@ import { css } from "typesafecss";
 import { URLParam } from "sliftutils/render-utils/URLParam";
 import { observer } from "sliftutils/render-utils/observer";
 import { LetterFastGame } from "./LetterFastGame";
-import { GameConfig } from "./GameConfig";
 import { GridCell } from "./GameState";
 import { NotificationUI } from "./NotificationUI";
 
@@ -47,30 +46,14 @@ export class Page extends preact.Component {
     componentDidMount() {
         document.addEventListener("keydown", this.onKeyDown);
     }
-    componentWillUnmount() {
-        document.removeEventListener("keydown", this.onKeyDown);
-    }
     render() {
-        let pages = [
-            {
-                key: "config",
-                content: <GameConfig />
-            },
-            {
-                key: "game",
-                content: <LetterFastGame />
-            },
-        ];
-
-        let page = pages.find(p => p.key === pageURL.value) || pages[0];
-
         return (
-            <div className={css.size("100vw", "100vh")
+            <div className={css.width("100svw").height("100svh")
                 .background("linear-gradient(135deg, #1a0b2e 0%, #2d1b69 50%, #1a0b2e 100%)")
-                .overflowAuto
+                .overflowHidden
             }>
                 <NotificationUI />
-                {page.content}
+                <LetterFastGame />
             </div>
         );
     }

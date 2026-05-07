@@ -133,7 +133,9 @@ export const gameState = observable<GameState>({
     grid: [],
     timeRemaining: initialConfig.gameDuration,
     score: 0,
-    matchedWords: [],
+    matchedWords: [
+
+    ],
     matchedWordsSet: new Set<string>(),
     isMultiplayer: false,
     gameId: undefined,
@@ -230,7 +232,7 @@ export async function endGame() {
 
     if (!gameState.isMultiplayer && !isNode()) {
         let playerResults: GameOverState["playerResults"];
-        
+
         if (gameState.isChallengeMode && gameState.challengerData) {
             playerResults = [
                 {

@@ -3,7 +3,7 @@ import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { pageURL, joinGameIdURL, challengeURL } from "./Page";
+import { joinGameIdURL, challengeURL } from "./Page";
 import {
     CELL_SIZE,
     CELL_GAP,
@@ -22,15 +22,14 @@ import {
     cleanup,
     GridCell,
     changeGridSize,
+    applySettings,
 } from "./GameState";
 import { getRPCClient, resetRPCClient } from "./rpcClient";
-import { getSavedConfigOrDefaults, saveConfig } from "./GameConfig";
+import { getSavedConfigOrDefaults, loadSavedConfig, saveConfig } from "./GameConfig";
 import { ConnectionManager } from "./ConnectionManager";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
-const GRID_TO_WORDS_GAP = 20;
-const CURRENT_WORD_HEIGHT = 32;
 const BELOW_GRID_GAP = 12;
 const WRONG_WORD_BASE_TIMEOUT = 1000;
 const WRONG_WORD_TIMEOUT_INCREMENT = 100;
@@ -38,9 +37,9 @@ const MAX_WRONG_WORD_TIMEOUT = 3000;
 const CANCEL_ZONE_SIZE = 80;
 const TIMEOUT_FADEOUT_DURATION = 300;
 
-const MARGIN_EMPTY_SIDE = 20;
-const MIN_SPACE_CONTENT_AXIS_NORMAL = 500;
-const MIN_SPACE_CONTENT_AXIS_PORTRAIT = 200;
+const MARGIN_EMPTY_SIDE = 10;
+const BOTTOM_HEIGHT_FRACTION = 0.2;
+const SECTION_GAP = 12;
 function lineIntersectsCell(
     lineStart: { x: number; y: number },
     lineEnd: { x: number; y: number },
@@ -167,8 +166,6 @@ export class LetterFastGame extends preact.Component {
         scale: 1,
         totalWidth: 0,
         totalHeight: 0,
-        // default is portrait
-        isRotated: false,
         debugPositions: [] as { x: number; y: number }[],
         isFullscreen: false,
         showCancelZone: false,
@@ -180,6 +177,15 @@ export class LetterFastGame extends preact.Component {
         linkCopied: false,
         isConverting: false,
         reconnectCountdown: 0,
+        menuOpen: false,
+        cfgWidth: 4,
+        cfgHeight: 4,
+        cfgDuration: 90000,
+        cfgShowRemaining: false,
+        cfgShowTotal: false,
+        joinGameId: "",
+        joining: false,
+        menuError: undefined as string | undefined,
     });
 
     connectionManager: ConnectionManager | undefined;
@@ -190,14 +196,6 @@ export class LetterFastGame extends preact.Component {
         if (e.touches.length > 1) {
             e.preventDefault();
         }
-    };
-
-    preventGlobalTouchMove = (e: TouchEvent) => {
-        e.preventDefault();
-    };
-
-    onFullscreenChange = () => {
-        this.synced.isFullscreen = !!document.fullscreenElement;
     };
 
     vibrate() {
@@ -212,23 +210,8 @@ export class LetterFastGame extends preact.Component {
         }
     }
 
-    async toggleFullscreen() {
-        if (!isNode()) {
-            if (!document.fullscreenElement) {
-                await document.documentElement.requestFullscreen();
-            } else {
-                await document.exitFullscreen();
-            }
-        }
-    }
-
     calculateScale = () => {
         if (isNode()) return;
-
-        const containerWidth = window.innerWidth;
-        const containerHeight = window.innerHeight;
-
-        this.synced.isRotated = containerWidth < containerHeight * 0.75;
 
         const gridSize = getCurrentGridSize();
         const gridNaturalWidth = CELL_SIZE * gridSize.width + CELL_GAP * (gridSize.width - 1);
@@ -237,24 +220,36 @@ export class LetterFastGame extends preact.Component {
         this.synced.totalWidth = gridNaturalWidth;
         this.synced.totalHeight = gridNaturalHeight;
 
-        let availableWidth: number;
-        let availableHeight: number;
+        const containerW = this.midElem ? this.midElem.clientWidth : window.innerWidth;
+        const containerH = this.midElem ? this.midElem.clientHeight : 0;
+        if (containerW <= 0 || containerH <= 0) return;
 
-        if (this.synced.isRotated) {
-            availableWidth = containerWidth - (MARGIN_EMPTY_SIDE * 2);
-            availableHeight = containerHeight - MIN_SPACE_CONTENT_AXIS_PORTRAIT;
-        } else {
-            availableWidth = containerWidth - MIN_SPACE_CONTENT_AXIS_NORMAL;
-            availableHeight = containerHeight - (MARGIN_EMPTY_SIDE * 2);
-        }
-
-        console.log({ availableWidth, availableHeight });
+        const availableWidth = containerW - BELOW_GRID_GAP;
+        const availableHeight = containerH - BELOW_GRID_GAP;
 
         const scaleWidth = availableWidth / gridNaturalWidth;
         const scaleHeight = availableHeight / gridNaturalHeight;
         const scaleFactor = Math.min(scaleWidth, scaleHeight);
 
         this.synced.scale = Math.max(0.3, scaleFactor);
+    };
+
+    midResizeObserver: ResizeObserver | undefined;
+    midElem: HTMLDivElement | undefined;
+
+    setMidRef = (elem: HTMLDivElement | null) => {
+        if (!elem) return;
+        if (this.midElem === elem) return;
+        this.midElem = elem;
+        if (this.midResizeObserver) this.midResizeObserver.disconnect();
+        if (typeof ResizeObserver === "undefined") {
+            this.calculateScale();
+            return;
+        }
+        this.midResizeObserver = new ResizeObserver(() => {
+            this.calculateScale();
+        });
+        this.midResizeObserver.observe(elem);
     };
 
     convertToMultiplayer = async () => {
@@ -309,6 +304,78 @@ export class LetterFastGame extends preact.Component {
         } finally {
             this.synced.isConverting = false;
         }
+    };
+
+    enterTestMode = () => {
+        gameState.isMultiplayer = true;
+        gameState.gameId = "TEST01";
+        gameState.connectionStatus = "connected";
+        gameState.myPlayerIndex = 1;
+        gameState.players = [
+            { id: "alice", score: 142 },
+            { id: "self", score: 87 },
+            { id: "carol", score: 56 },
+            { id: "dave", score: 23 },
+        ];
+        gameState.status = "playing";
+        gameState.score = 87;
+        gameState.timeRemaining = 42000;
+        gameState.gameDuration = 90000;
+        gameState.totalPossibleScore = 500;
+        gameState.totalPossibleWords = 80;
+        gameState.showTotalPossibleScore = true;
+        gameState.showRemainingWordsPerCell = true;
+        gameState.matchedWords = [
+            { word: "HELLO", points: 8 },
+            { word: "WORLD", points: 9 },
+            { word: "TEST", points: 4 },
+            { word: "MODE", points: 7 },
+            { word: "GAME", points: 6 },
+            { word: "PLAY", points: 9 },
+            { word: "WORD", points: 8 },
+            { word: "FAST", points: 7 },
+            { word: "QUICK", points: 19 },
+            { word: "JUMP", points: 13 },
+            { word: "BRAIN", points: 7 },
+            { word: "PUZZLE", points: 19 },
+        ];
+        gameState.matchedWordsSet = new Set(gameState.matchedWords.map(w => w.word));
+
+        const gridSize = getCurrentGridSize();
+        const cells: { row: number; col: number }[] = [];
+        const sampleLetters = ["T", "E", "S", "T"];
+        for (let i = 0; i < sampleLetters.length && i < gridSize.width; i++) {
+            cells.push({ row: 0, col: i });
+            if (gameState.grid[0] && gameState.grid[0][i]) {
+                gameState.grid[0][i] = {
+                    ...gameState.grid[0][i],
+                    letter: sampleLetters[i],
+                };
+            }
+        }
+        if (gameState.grid[0] && gameState.grid[0][0]) {
+            gameState.grid[0][0] = { ...gameState.grid[0][0], multiplier: 2 };
+        }
+        if (gameState.grid[1] && gameState.grid[1][1]) {
+            gameState.grid[1][1] = { ...gameState.grid[1][1], multiplier: 3 };
+        }
+        this.synced.selectedCells = cells;
+        this.synced.drawing = true;
+        this.synced.showCancelZone = true;
+        this.synced.currentPos = cellCenter(0, Math.min(sampleLetters.length, gridSize.width) - 1);
+
+        this.synced.pulseCells = [{ row: 0, col: 0 }, { row: 0, col: 1 }];
+        const scoreId = this.floatingScoreId++;
+        this.synced.floatingScores.push({ id: scoreId, points: 12, timestamp: Date.now() });
+
+        this.synced.showTimeoutMessage = true;
+        this.synced.timeoutMessage = "Not a word!";
+        this.synced.wrongWordCells = [{ row: 1, col: 0 }, { row: 1, col: 1 }];
+        gameState.timeoutUntil = Date.now() + 5000;
+
+        this.synced.linkCopied = true;
+
+        this.redraw();
     };
 
     leaveMultiplayer = () => {
@@ -410,7 +477,84 @@ export class LetterFastGame extends preact.Component {
         await this.handleSelectionEnd();
     };
 
+    loadMenuConfig = () => {
+        const saved = loadSavedConfig();
+        if (saved) {
+            this.synced.cfgWidth = saved.gridWidth;
+            this.synced.cfgHeight = saved.gridHeight;
+            this.synced.cfgDuration = saved.gameDuration;
+            this.synced.cfgShowRemaining = !!saved.showRemainingWordsPerCell;
+            this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
+        } else {
+            this.synced.cfgWidth = gameState.gridWidth;
+            this.synced.cfgHeight = gameState.gridHeight;
+            this.synced.cfgDuration = gameState.gameDuration;
+        }
+    };
+
+    saveMenuConfig = () => {
+        saveConfig({
+            gridWidth: this.synced.cfgWidth,
+            gridHeight: this.synced.cfgHeight,
+            gameDuration: this.synced.cfgDuration,
+            showRemainingWordsPerCell: this.synced.cfgShowRemaining,
+            showTotalPossibleScore: this.synced.cfgShowTotal,
+        });
+        applySettings({
+            showRemainingWordsPerCell: this.synced.cfgShowRemaining,
+            showTotalPossibleScore: this.synced.cfgShowTotal,
+        });
+        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
+            void (async () => {
+                try {
+                    const rpc = getRPCClient();
+                    await rpc.updateGameSettings(
+                        gameState.gameId!,
+                        this.synced.cfgWidth,
+                        this.synced.cfgHeight,
+                        this.synced.cfgDuration,
+                        this.synced.cfgShowRemaining,
+                        this.synced.cfgShowTotal,
+                    );
+                } catch (error) {
+                    console.error("Failed to push settings to server:", error);
+                }
+            })();
+        }
+    };
+
+    applyConfigAndStart = async () => {
+        const w = this.synced.cfgWidth;
+        const h = this.synced.cfgHeight;
+        if (w < 2 || w > 10 || h < 2 || h > 10) return;
+        await changeGridSize({ width: w, height: h });
+        gameState.gameDuration = this.synced.cfgDuration;
+        gameState.timeRemaining = this.synced.cfgDuration;
+        this.synced.menuOpen = false;
+        await startGame();
+    };
+
+    onJoinGameFromMenu = async () => {
+        if (!this.synced.joinGameId) {
+            this.synced.menuError = "Please enter a game ID";
+            return;
+        }
+        this.synced.joining = true;
+        this.synced.menuError = undefined;
+        try {
+            gameState.gameId = this.synced.joinGameId.toUpperCase();
+            gameState.isMultiplayer = true;
+            joinGameIdURL.value = this.synced.joinGameId.toUpperCase();
+            this.synced.menuOpen = false;
+        } catch (error) {
+            this.synced.menuError = error instanceof Error ? error.message : String(error);
+        } finally {
+            this.synced.joining = false;
+        }
+    };
+
     async componentDidMount() {
+        this.loadMenuConfig();
         if (!isNode()) {
             this.calculateScale();
 
@@ -419,12 +563,8 @@ export class LetterFastGame extends preact.Component {
                 () => this.calculateScale(),
             );
 
-            window.addEventListener("resize", this.calculateScale);
             window.addEventListener("keydown", this.onKeyDown);
             document.addEventListener("touchstart", this.preventGlobalTouch, { passive: false });
-            document.addEventListener("touchmove", this.preventGlobalTouchMove, { passive: false });
-            document.addEventListener("fullscreenchange", this.onFullscreenChange);
-            this.synced.isFullscreen = !!document.fullscreenElement;
         }
 
         const challengeData = challengeURL.value;
@@ -537,16 +677,17 @@ export class LetterFastGame extends preact.Component {
             this.connectionManager.cleanup();
             this.connectionManager = undefined;
         }
+        if (this.midResizeObserver) {
+            this.midResizeObserver.disconnect();
+            this.midResizeObserver = undefined;
+        }
         if (!isNode()) {
-            window.removeEventListener("resize", this.calculateScale);
             window.removeEventListener("keydown", this.onKeyDown);
             window.removeEventListener("mousemove", this.onGlobalMouseMove);
             window.removeEventListener("touchmove", this.onGlobalTouchMove, { passive: false } as any);
             window.removeEventListener("mouseup", this.onGlobalMouseUp);
             window.removeEventListener("touchend", this.onGlobalTouchEnd, { passive: false } as any);
             document.removeEventListener("touchstart", this.preventGlobalTouch);
-            document.removeEventListener("touchmove", this.preventGlobalTouchMove);
-            document.removeEventListener("fullscreenchange", this.onFullscreenChange);
         }
     }
 
@@ -641,15 +782,8 @@ export class LetterFastGame extends preact.Component {
         this.synced.currentPos = pos;
         if (DEBUG_MODE) this.synced.debugPositions.push(pos);
 
-        let cancelZoneX: number;
-        let cancelZoneY: number;
-        if (this.synced.isRotated) {
-            cancelZoneX = this.synced.totalWidth - CANCEL_ZONE_SIZE;
-            cancelZoneY = this.synced.totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT;
-        } else {
-            cancelZoneX = this.synced.totalWidth + GRID_TO_WORDS_GAP;
-            cancelZoneY = this.synced.totalHeight - CANCEL_ZONE_SIZE;
-        }
+        const cancelZoneX = this.synced.totalWidth - CANCEL_ZONE_SIZE;
+        const cancelZoneY = this.synced.totalHeight + BELOW_GRID_GAP;
         const wasOverCancel = this.synced.isOverCancelZone;
         this.synced.isOverCancelZone = pos.x >= cancelZoneX && pos.x <= cancelZoneX + CANCEL_ZONE_SIZE && pos.y >= cancelZoneY && pos.y <= cancelZoneY + CANCEL_ZONE_SIZE;
 
@@ -841,23 +975,29 @@ export class LetterFastGame extends preact.Component {
 
     renderTimeAndScore(timeBarHue: number, timePercent: number) {
         return (
-            <>
+            <div className={css.hbox(10).alignItems("center").fillWidth}>
                 <div className={css.vbox(4)}>
-                    <div className={css.fontSize(32).width(100).textAlign("center")}>
+                    <div className={css.fontSize(28).width(90).textAlign("center")}>
                         {formatTime(gameState.timeRemaining)}
                     </div>
-                    <div className={css.width(100).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
+                    <div className={css.width(90).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
                         <div
                             className={css.absolute.pos(0, 0).height(4).hsl(timeBarHue, 70, 50).borderRadius(2) + ""}
                             style={{ width: `${timePercent}%`, transition: "width 0.1s linear" }}
                         />
                     </div>
                 </div>
-                <div className={css.fontSize(20).relative}>
-                    Score: {gameState.score}
+                <div className={css.hbox(6).alignItems("center").relative
+                    .pad2(4, 10).borderRadius(8)
+                    .hsl(240, 30, 15)
+                }
+                    style={{ border: "1px solid rgba(255,255,255,0.15)" }}
+                >
+                    <span className={css.fontSize(20)}>🏆</span>
+                    <span className={css.fontSize(20).fontWeight("bold")}>{gameState.score}</span>
                     {gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (
-                        <span className={css.fontSize(16).colorhsl(0, 0, 70).marginLeft(6) + ""}>
-                            / {gameState.totalPossibleScore} ({Math.round(gameState.score / gameState.totalPossibleScore * 100)}%)
+                        <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                            / {gameState.totalPossibleScore}
                         </span>
                     )}
                     {this.synced.floatingScores.map(fs => (
@@ -869,38 +1009,41 @@ export class LetterFastGame extends preact.Component {
                             +{fs.points}
                         </div>
                     ))}
-                    {/* 
-                    <span className={css.fontSize(14).colorhsl(0, 0, 70)}>
-                        Window: {isNode() ? "N/A" : `${window.innerWidth}x${window.innerHeight}`}
-                    </span> */}
                 </div>
-            </>
+                <button
+                    onClick={() => { this.synced.menuOpen = !this.synced.menuOpen; }}
+                    title="Menu"
+                    className={css.fontSize(24).pad2(4, 10) + ""}
+                    style={{ marginLeft: "auto" }}
+                >
+                    ☰
+                </button>
+            </div>
         );
     }
 
     renderPlayerScores() {
         if (gameState.isChallengeMode && gameState.challengerData) {
             return (
-                <div className={css.vbox(4)}>
-                    <div className={css.fontSize(14).colorhsl(0, 0, 100)}>
-                        Challenger: {gameState.challengerData.score}
-                    </div>
+                <div className={css.fontSize(14).colorhsl(0, 0, 100)}>
+                    Challenger: {gameState.challengerData.score}
                 </div>
             );
         }
         if (!gameState.isMultiplayer || gameState.players.length === 0) return undefined;
         return (
-            <div className={css.vbox(6)}>
-                <div className={css.fontSize(16).fontWeight("bold").colorhsl(0, 0, 100)}>
-                    Players
-                </div>
-                {gameState.players.map((p, index) => (
-                    <div key={p.id} className={css.hbox(6).fontSize(14).colorhsl(0, 0, 100)}>
-                        {index === 0 && <span>👑</span>}
-                        <span>Player {index + 1}: {p.score}</span>
-                        {index === gameState.myPlayerIndex && <span className={css.opacity(0.7)}>(You)</span>}
-                    </div>
-                ))}
+            <div className={css.hbox(10).wrap.colorhsl(0, 0, 100)}>
+                {gameState.players.map((p, index) => {
+                    const letter = String.fromCharCode(65 + index);
+                    const isYou = index === gameState.myPlayerIndex;
+                    return (
+                        <div key={p.id} className={css.hbox(3).alignItems("center").fontSize(14)}>
+                            {isYou && <span title="You">👤</span>}
+                            <span className={css.fontWeight("bold") + ""}>{letter}</span>
+                            <span>{p.score}</span>
+                        </div>
+                    );
+                })}
             </div>
         );
     }
@@ -941,72 +1084,61 @@ export class LetterFastGame extends preact.Component {
         );
     }
 
-    renderButtons() {
+    renderMenuButtons() {
+        const btn = css.fontSize(13).pad2(6, 10).fillWidth.textAlign("left") + "";
+        const startLabel = gameState.status === "ready" && "▶️ Start Game"
+            || gameState.status === "playing" && "▶️ Restart"
+            || "▶️ Play Again";
+        const closeAfter = (fn: () => unknown | Promise<unknown>) => async () => {
+            this.synced.menuOpen = false;
+            await fn();
+        };
         return (
             <>
                 {!gameState.isMultiplayer && (
-                    <button onClick={async () => await startGame()}>
-                        {gameState.status === "ready" && "Start Game"}
-                        {gameState.status === "playing" && "Restart"}
-                        {gameState.status === "finished" && "Play Again"}
+                    <button onClick={closeAfter(() => startGame())} className={btn}>
+                        {startLabel}
                     </button>
                 )}
                 {gameState.status === "playing" && !gameState.isMultiplayer && (
-                    <button onClick={() => endGame()}>
-                        End Now
+                    <button onClick={closeAfter(() => endGame())} className={btn}>
+                        ⏹️ End Now
                     </button>
                 )}
-                {gameState.status === "ready" && !gameState.isMultiplayer && (
-                    <button onClick={async () => {
-                        const defaults = { gridWidth: 4, gridHeight: 4, gameDuration: 90000 };
-                        await changeGridSize({ width: defaults.gridWidth, height: defaults.gridHeight });
-                        gameState.gameDuration = defaults.gameDuration;
-                        gameState.timeRemaining = defaults.gameDuration;
-                        saveConfig(defaults);
-                    }}>
-                        Default
-                    </button>
-                )}
-                <button onClick={() => this.toggleFullscreen()}>
-                    {this.synced.isFullscreen && "Exit Fullscreen" || "Fullscreen"}
-                </button>
                 {!gameState.isMultiplayer && (
-                    <button onClick={() => {
-                        pageURL.value = "config";
-                    }}>
-                        Settings
+                    <button
+                        onClick={closeAfter(() => this.convertToMultiplayer())}
+                        disabled={this.synced.isConverting}
+                        className={btn}
+                    >
+                        {this.synced.isConverting && "👥 Converting…" || "👥 Convert to Multiplayer"}
+                    </button>
+                )}
+                {!gameState.isMultiplayer && (
+                    <button
+                        onClick={closeAfter(() => this.enterTestMode())}
+                        className={btn}
+                    >
+                        🧪 Test Mode
                     </button>
                 )}
                 {gameState.isMultiplayer && (
                     <>
                         <button
                             onClick={this.copyShareLink}
-                            className={css.hsl(120, 60, 40) + ""}
+                            className={css.hsl(120, 60, 40).fontSize(16).pad2(10, 14).fillWidth.textAlign("left") + ""}
                         >
-                            {this.synced.linkCopied && "Copied!" || "Copy Link"}
+                            {this.synced.linkCopied && "✓ Copied!" || "🔗 Copy Link"}
                         </button>
                         <button
-                            onClick={this.leaveMultiplayer}
-                            className={css.hsl(0, 60, 40) + ""}
+                            onClick={closeAfter(() => this.leaveMultiplayer())}
+                            className={css.hsl(0, 60, 40).fontSize(16).pad2(10, 14).fillWidth.textAlign("left") + ""}
                         >
-                            Leave Multiplayer
+                            🚪 Leave Multiplayer
                         </button>
                     </>
                 )}
             </>
-        );
-    }
-
-    renderMultiplayerButton() {
-        if (gameState.isMultiplayer) return undefined;
-        return (
-            <button
-                onClick={this.convertToMultiplayer}
-                disabled={this.synced.isConverting}
-                className={css.hsl(200, 60, 40) + ""}
-            >
-                {this.synced.isConverting && "Converting..." || "Convert to Multiplayer"}
-            </button>
         );
     }
 
@@ -1148,8 +1280,8 @@ export class LetterFastGame extends preact.Component {
                                 + (this.synced.isOverCancelZone && css.hsl(0, 80, 50) || css.hsl(0, 0, 30))
                             }
                             style={{
-                                left: this.synced.isRotated && `${this.synced.totalWidth - CANCEL_ZONE_SIZE}px` || `${this.synced.totalWidth + GRID_TO_WORDS_GAP}px`,
-                                top: this.synced.isRotated && `${this.synced.totalHeight + BELOW_GRID_GAP + CURRENT_WORD_HEIGHT}px` || `${this.synced.totalHeight - CANCEL_ZONE_SIZE}px`,
+                                left: `${this.synced.totalWidth - CANCEL_ZONE_SIZE}px`,
+                                top: `${this.synced.totalHeight + BELOW_GRID_GAP}px`,
                                 transition: "background-color 0.1s",
                                 pointerEvents: "none"
                             }}
@@ -1174,41 +1306,207 @@ export class LetterFastGame extends preact.Component {
         );
     }
 
-    renderCurrentWord(currentWord: string) {
+    renderMenu() {
+        if (!this.synced.menuOpen) return undefined;
+        const inputCls = css.fontSize(13).pad2(4, 6).width(48) + "";
+        const sectionTitle = css.fontSize(12).fontWeight("bold").colorhsl(0, 0, 70) + "";
         return (
-            <div className={css.fontSize(16).height(20).colorhsl(0, 0, 100)
-                .fontWeight("bold")
-            }>
-                {currentWord}
+            <div
+                className={css.absolute.pos(0, 0).fillBoth.hsla(0, 0, 0, 0.6)
+                    .hbox(0).justifyContent("end")
+                }
+                style={{ zIndex: 100 }}
+                onClick={() => { this.synced.menuOpen = false; }}
+            >
+                <div
+                    className={css.vbox(8).pad2(10).overflowAuto
+                        .hsl(240, 30, 12).colorhsl(0, 0, 100)
+                    }
+                    style={{
+                        width: "min(300px, 88vw)",
+                        height: "100%",
+                        boxShadow: "-4px 0 20px rgba(0,0,0,0.5)",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className={css.hbox(8).alignItems("center").justifyContent("space-between")}>
+                        <div className={css.fontSize(14).fontWeight("bold")}>Menu</div>
+                        <button
+                            onClick={() => { this.synced.menuOpen = false; }}
+                            className={css.fontSize(14).pad2(2, 6) + ""}
+                        >
+                            ✕
+                        </button>
+                    </div>
+
+                    {!gameState.isMultiplayer && (
+                        <div className={css.hbox(6).alignItems("center")}>
+                            <input
+                                type="text"
+                                placeholder="Game ID"
+                                value={this.synced.joinGameId}
+                                onInput={(e) => {
+                                    this.synced.joinGameId = e.currentTarget.value;
+                                }}
+                                onKeyDown={async (e) => {
+                                    if (e.key === "Enter") {
+                                        await this.onJoinGameFromMenu();
+                                    }
+                                }}
+                                className={css.fontSize(13).pad2(4, 6).textTransform("uppercase").flexGrow(1).minWidth(0) + ""}
+                            />
+                            <button
+                                onClick={this.onJoinGameFromMenu}
+                                disabled={this.synced.joining}
+                                className={css.fontSize(13).pad2(4, 8) + ""}
+                            >
+                                {this.synced.joining && "…" || "Join"}
+                            </button>
+                        </div>
+                    )}
+
+                    {gameState.isMultiplayer && gameState.gameId && (
+                        <div className={css.vbox(2)
+                            .pad2(6, 8).borderRadius(6)
+                            .hsl(240, 30, 18)
+                        }>
+                            <div className={css.fontSize(10).colorhsl(0, 0, 70)}>Game Code</div>
+                            <div className={css.fontSize(18).fontWeight("bold").fontFamily("monospace")
+                                .letterSpacing("2px")
+                            }>
+                                {gameState.gameId}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className={css.vbox(4)}>
+                        {this.renderMenuButtons()}
+                    </div>
+
+                    <div className={css.vbox(4)}>
+                        <div className={sectionTitle}>Grid Size (2-10)</div>
+                        <div className={css.hbox(6).alignItems("center")}>
+                            <input
+                                type="number"
+                                min="2"
+                                max="10"
+                                value={this.synced.cfgWidth}
+                                onInput={(e) => {
+                                    const v = parseInt(e.currentTarget.value, 10);
+                                    if (!isNaN(v)) {
+                                        this.synced.cfgWidth = v;
+                                        this.saveMenuConfig();
+                                    }
+                                }}
+                                className={inputCls}
+                            />
+                            <span>x</span>
+                            <input
+                                type="number"
+                                min="2"
+                                max="10"
+                                value={this.synced.cfgHeight}
+                                onInput={(e) => {
+                                    const v = parseInt(e.currentTarget.value, 10);
+                                    if (!isNaN(v)) {
+                                        this.synced.cfgHeight = v;
+                                        this.saveMenuConfig();
+                                    }
+                                }}
+                                className={inputCls}
+                            />
+                            <button
+                                onClick={async () => await this.applyConfigAndStart()}
+                                className={css.fontSize(12).pad2(4, 8) + ""}
+                            >
+                                Start
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className={css.vbox(4)}>
+                        <div className={sectionTitle}>Duration (s)</div>
+                        <input
+                            type="number"
+                            min="10"
+                            max="3600"
+                            value={Math.round(this.synced.cfgDuration / 1000)}
+                            onInput={(e) => {
+                                const v = parseInt(e.currentTarget.value, 10);
+                                if (!isNaN(v) && v >= 10 && v <= 3600) {
+                                    this.synced.cfgDuration = v * 1000;
+                                    this.saveMenuConfig();
+                                }
+                            }}
+                            className={css.fontSize(13).pad2(4, 6).width(72) + ""}
+                        />
+                    </div>
+
+                    {(() => {
+                        const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const showRem = inMultiplayer ? gameState.showRemainingWordsPerCell : this.synced.cfgShowRemaining;
+                        const showTot = inMultiplayer ? gameState.showTotalPossibleScore : this.synced.cfgShowTotal;
+                        return (
+                            <div className={css.vbox(4)}>
+                                <div className={sectionTitle}>Display{inMultiplayer && !isHost ? " (host only)" : ""}</div>
+                                <label className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                    <input
+                                        type="checkbox"
+                                        checked={showRem}
+                                        disabled={!isHost}
+                                        onChange={(e) => {
+                                            this.synced.cfgShowRemaining = e.currentTarget.checked;
+                                            this.saveMenuConfig();
+                                        }}
+                                    />
+                                    <span>Remaining words per tile</span>
+                                </label>
+                                <label className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? css.cursor("pointer") : css.opacity(0.6))}>
+                                    <input
+                                        type="checkbox"
+                                        checked={showTot}
+                                        disabled={!isHost}
+                                        onChange={(e) => {
+                                            this.synced.cfgShowTotal = e.currentTarget.checked;
+                                            this.saveMenuConfig();
+                                        }}
+                                    />
+                                    <span>Total possible score</span>
+                                </label>
+                            </div>
+                        );
+                    })()}
+
+                    {this.synced.menuError && (
+                        <div className={css.colorhsl(0, 70, 60).fontSize(12).pad2(6, 8).borderRadius(6).hsl(0, 30, 20)}>
+                            {this.synced.menuError}
+                        </div>
+                    )}
+                </div>
             </div>
         );
     }
 
     renderMatchedWords() {
         return (
-            <div className={css.vbox(12).colorhsl(0, 0, 100) + (this.synced.isRotated && css.fillWidth || css.width(250))}>
-                <div className={css.vbox(6).overflowAuto.fillWidth
-                    .hsl(240, 30, 15).borderRadius(8).pad2(12)
-                    + (this.synced.isRotated && css.height(150) || css.height(this.synced.totalHeight))
-                }>
-                    {gameState.matchedWords.slice().reverse().map((w, i) => (
-                        <div key={i} className={css.hbox(8).fontSize(18)}>
-                            <span>{w.word}</span>
-                            <span className={css.fontSize(14).opacity(0.7)}>
-                                {w.points}
-                            </span>
-                        </div>
-                    ))}
-                </div>
+            <div className={css.vbox(6).overflowAuto.fillBoth
+                .hsl(240, 30, 15).borderRadius(8).pad2(12)
+                .colorhsl(0, 0, 100)
+            }>
+                {gameState.matchedWords.slice().reverse().map((w, i) => (
+                    <div key={i} className={css.hbox(8).fontSize(18)}>
+                        <span>{w.word}</span>
+                        <span className={css.fontSize(14).opacity(0.7)}>
+                            {w.points}
+                        </span>
+                    </div>
+                ))}
             </div>
         );
     }
 
     render() {
-        let currentWord = (this.synced.wrongWordCells.length > 0 && this.synced.wrongWordCells || this.synced.selectedCells)
-            .map(c => gameState.grid[c.row][c.col].letter)
-            .join(" ");
-
         this.redraw();
 
         let timePercent = (gameState.timeRemaining / gameState.gameDuration) * 100;
@@ -1216,7 +1514,7 @@ export class LetterFastGame extends preact.Component {
 
         return (
             <div
-                className={css.fillBoth.vbox(0)
+                className={css.fillBoth.vbox(0).relative
                     .justifyContent("center").alignItems("center")
                 }
                 style={{
@@ -1226,6 +1524,7 @@ export class LetterFastGame extends preact.Component {
                     paddingRight: `calc(${MARGIN_EMPTY_SIDE}px + env(safe-area-inset-right))`,
                 }}
             >
+                {this.renderMenu()}
                 <style>{`
                     @keyframes pulseOut {
                         0% { 
@@ -1258,69 +1557,31 @@ export class LetterFastGame extends preact.Component {
                         animation: fadeOut ${TIMEOUT_FADEOUT_DURATION}ms ease-out forwards;
                     }
                 `}</style>
-                <div className={css.vbox(4)
-                    + (this.synced.isRotated && css.width(this.synced.totalWidth * this.synced.scale))
-                    + (!this.synced.isRotated && css.height(this.synced.totalHeight * this.synced.scale))
-                }>
-                    {this.synced.isRotated && (
-                        <>
-                            <div className={css.vbox(2).alignItems("start").colorhsl(0, 0, 100)}>
-                                {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                <div className={css.vbox(2)}>
-                                    <div className={css.hbox(12).wrap}>
-                                        {this.renderButtons()}
-                                    </div>
-                                    {!gameState.isMultiplayer && (
-                                        <div className={css.hbox(12).wrap}>
-                                            {this.renderMultiplayerButton()}
-                                        </div>
-                                    )}
-                                    {gameState.isMultiplayer && (
-                                        <div className={css.hbox(20).wrap}>
-                                            {this.renderConnectionStatus()}
-                                            {this.renderPlayerScores()}
-                                        </div>
-                                    )}
-                                </div>
+                <div className={css.fillBoth.vbox(SECTION_GAP).alignItems("center")}>
+                    <div
+                        className={css.vbox(6).alignItems("start").colorhsl(0, 0, 100).fillWidth}
+                    >
+                        {this.renderTimeAndScore(timeBarHue, timePercent)}
+                        {gameState.isMultiplayer && (
+                            <div className={css.hbox(12).wrap.alignItems("center")}>
+                                {this.renderConnectionStatus()}
+                                {this.renderPlayerScores()}
                             </div>
-                            <div className={
-                                css.vbox(6)
-
-                            }>
-                                {this.renderGrid()}
-                                {this.renderCurrentWord(currentWord)}
-                            </div>
-                            {this.renderMatchedWords()}
-                        </>
-                    )}
-                    {!this.synced.isRotated && (
-                        <>
-                            <div className={css.hbox(20).center}>
-                                <div className={css.vbox(20).alignItems("end").colorhsl(0, 0, 100)}>
-                                    {this.renderTimeAndScore(timeBarHue, timePercent)}
-                                    <div className={css.vbox(5).alignItems("end")}>
-                                        {this.renderButtons()}
-                                        {!gameState.isMultiplayer && (
-                                            <>
-                                                {this.renderMultiplayerButton()}
-                                            </>
-                                        )}
-                                        {gameState.isMultiplayer && (
-                                            <>
-                                                {this.renderConnectionStatus()}
-                                                {this.renderPlayerScores()}
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className={css.vbox(12)}>
-                                    {this.renderGrid()}
-                                    {this.renderCurrentWord(currentWord)}
-                                </div>
-                                {this.renderMatchedWords()}
-                            </div>
-                        </>
-                    )}
+                        )}
+                    </div>
+                    <div
+                        ref={this.setMidRef}
+                        className={css.fillWidth.vbox(0).justifyContent("center").alignItems("center")}
+                        style={{ flex: "1 1 0", minHeight: 0 }}
+                    >
+                        {this.renderGrid()}
+                    </div>
+                    <div
+                        className={css.fillWidth}
+                        style={{ height: `${BOTTOM_HEIGHT_FRACTION * 100}%`, flex: "0 0 auto" }}
+                    >
+                        {this.renderMatchedWords()}
+                    </div>
                 </div>
             </div>
         );
