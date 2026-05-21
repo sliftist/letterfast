@@ -10268,8 +10268,6 @@ climber
 climbers
 climbing
 climbs
-clime
-climes
 clinch
 clinched
 clincher
@@ -34755,7 +34753,6 @@ lysozyme
 lysozymes
 lytic
 ma
-mac
 macabre
 macadam
 macadamia

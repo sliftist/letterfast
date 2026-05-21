@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(yarn type *)"
+      "Bash(yarn type *)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl *)"
     ]
   }
 }

@@ -20,7 +20,7 @@ export function getRPCClient(): ReturnType<typeof getClient> {
                 host = "multiplayer.letterquick.com";
             }
         }
-        const wsUrl = `${protocol}://${host}:7276`;
+        const wsUrl = `${protocol}://${host}:8880`;
         rpcClientInstance = getClient(wsUrl, clientHandlers as any);
     }
 

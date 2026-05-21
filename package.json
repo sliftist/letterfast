@@ -13,7 +13,7 @@
         "test": "yarn typenode ./scripts/test.ts",
         "build-words": "node scripts/buildWordsJS.js",
         "build-web": "yarn build-words && build-web --indexHtml ./index.html",
-        "watch-web": "slift-watch --port 9877 \"web/*.ts\" \"web/*.tsx\" \"yarn build-web\"",
+        "watch-web": "slift-watch --port 9887 \"web/*.ts\" \"web/*.tsx\" \"yarn build-web\"",
         "watch": "yarn watch-web",
         "build": "yarn build-web",
         "upload-words": "yarn build-words && node scripts/uploadWords.js",

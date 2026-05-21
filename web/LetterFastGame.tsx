@@ -3,7 +3,7 @@ import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { joinGameIdURL, challengeURL } from "./Page";
+import { joinGameIdURL, challengeURL, boardURL } from "./Page";
 import {
     CELL_SIZE,
     CELL_GAP,
@@ -14,6 +14,7 @@ import {
     endGame,
     getCurrentGridSize,
     calculateWordScore,
+    calculateWordScoreForGrid,
     cellCenter,
     getCellAt,
     isAdjacent,
@@ -24,8 +25,11 @@ import {
     changeGridSize,
     applySettings,
 } from "./GameState";
+import { findPathsForWord } from "./GridGenerator";
+import { VoiceController, StreamingWord } from "./VoiceMode";
+import { preloadHomophoneDict, getHomophones, findPhoneticMatches } from "./Homophones";
 import { getRPCClient, resetRPCClient } from "./rpcClient";
-import { getSavedConfigOrDefaults, loadSavedConfig, saveConfig } from "./GameConfig";
+import { loadSavedConfig, saveConfig } from "./GameConfig";
 import { ConnectionManager } from "./ConnectionManager";
 import { showGameOver } from "./GameOver";
 
@@ -37,6 +41,10 @@ const WRONG_WORD_TIMEOUT_INCREMENT = 100;
 const MAX_WRONG_WORD_TIMEOUT = 3000;
 const CANCEL_ZONE_SIZE = 80;
 const TIMEOUT_FADEOUT_DURATION = 300;
+// If the user goes silent for at least this long, the next thing they
+// say is treated as a new phrase and the prior voice transcript is
+// wiped before tokens for the new phrase land.
+const VOICE_RESET_GAP_MS = 1000;
 const PEER_FLASH_STAGGER_MS = 100;
 const PEER_FLASH_DURATION_MS = 500;
 
@@ -155,6 +163,19 @@ function redrawCanvas(
     ctx.stroke();
 }
 
+type VoiceTokenStatus = "pending" | "ok" | "not-word" | "not-on-board" | "already" | "skipped";
+interface VoiceToken {
+    word: string;
+    status: VoiceTokenStatus;
+    points?: number;
+}
+
+type AttemptResult =
+    | { status: "not-word" }
+    | { status: "not-on-board" }
+    | { status: "already" }
+    | { status: "ok"; word: string; bestPath: { row: number; col: number }[]; bestScore: number };
+
 interface FloatingScore {
     id: number;
     points: number;
@@ -194,7 +215,8 @@ export class LetterFastGame extends preact.Component {
         cfgDurationStr: "90",
         cfgShowRemaining: false,
         cfgShowTotal: false,
-        cfgGameMode: "competitive" as "competitive" | "cooperative",
+        cfgAutoBestPath: true,
+        cfgGameMode: "competitive" as "competitive" | "cooperative" | "competitive-shared",
         cfgCoopGoalPct: 50,
         joinGameId: randomGameCode(),
         joining: false,
@@ -203,7 +225,19 @@ export class LetterFastGame extends preact.Component {
         joinPopupBackdropDown: false,
         menuBackdropDown: false,
         peerFlashCells: [] as { row: number; col: number; id: number }[],
+        blockedFlashCells: [] as { row: number; col: number; id: number }[],
+        voiceModeOn: false,
+        voiceLoading: false,
+        voiceStatus: undefined as string | undefined,
+        voiceError: undefined as string | undefined,
+        voiceTranscriptText: "" as string,
+        voiceTranscriptListening: false,
+        voiceTokens: [] as VoiceToken[],
+        boardImportError: undefined as string | undefined,
+        boardImportCopied: false,
     });
+
+    boardTextareaRef: HTMLTextAreaElement | undefined;
 
     connectionManager: ConnectionManager | undefined;
     reconnectCountdownInterval: number | undefined;
@@ -220,6 +254,18 @@ export class LetterFastGame extends preact.Component {
                     this.synced.peerFlashCells = this.synced.peerFlashCells.filter(c => c.id !== id);
                 }, PEER_FLASH_DURATION_MS);
             }, i * PEER_FLASH_STAGGER_MS);
+        });
+    };
+
+    flashBlockedCells = (cells: { row: number; col: number }[]) => {
+        // Red outline flash on the cells the user just drew, signaling
+        // "this word was already taken by someone else."
+        cells.forEach((cell) => {
+            const id = ++this.peerFlashIdSeq;
+            this.synced.blockedFlashCells.push({ row: cell.row, col: cell.col, id });
+            setTimeout(() => {
+                this.synced.blockedFlashCells = this.synced.blockedFlashCells.filter(c => c.id !== id);
+            }, 800);
         });
     };
 
@@ -283,62 +329,89 @@ export class LetterFastGame extends preact.Component {
         this.midResizeObserver.observe(elem);
     };
 
-    convertToMultiplayer = async () => {
-        if (isNode()) return;
-
-        this.synced.isConverting = true;
-
+    tryStartGameAsHost = async () => {
+        if (!gameState.isMultiplayer) return;
+        if (!gameState.gameId) return;
+        if (gameState.myPlayerIndex !== 0) return;
+        if (gameState.status === "playing") return;
         try {
-            const defaults = getSavedConfigOrDefaults();
             const rpc = getRPCClient();
-
-            const code = (this.synced.joinGameId || randomGameCode()).toUpperCase();
-            this.connectionManager = new ConnectionManager({
-                connect: async () => {
-                    resetRPCClient();
-                    const newRpc = getRPCClient();
-                    await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration);
-                    gameState.gameId = code;
-                    gameState.isMultiplayer = true;
-
-                    await (newRpc as any).updateGameSettings(
-                        code,
-                        gameState.gridWidth,
-                        gameState.gridHeight,
-                        gameState.gameDuration,
-                        gameState.showRemainingWordsPerCell,
-                        gameState.showTotalPossibleScore,
-                        gameState.gameMode,
-                        gameState.coopGoalFraction,
-                    );
-
-                    joinGameIdURL.value = code;
-
-                    const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
-                    window.history.pushState({}, "", newUrl);
-                },
-                disconnect: () => {
-                    resetRPCClient();
-                },
-                callbacks: {
-                    onStatusChange: (status) => {
-                        gameState.connectionStatus = status;
-                        if (status === "disconnected" || status === "error") {
-                            this.startReconnectCountdown();
-                        } else {
-                            this.stopReconnectCountdown();
-                        }
-                    },
-                }
-            });
-
-            await this.connectionManager.connect();
+            await (rpc as any).updateGameSettings(
+                gameState.gameId,
+                this.synced.cfgWidth,
+                this.synced.cfgHeight,
+                this.synced.cfgDuration,
+                this.synced.cfgShowRemaining,
+                this.synced.cfgShowTotal,
+                this.synced.cfgGameMode,
+                this.synced.cfgCoopGoalPct / 100,
+            );
+            await rpc.startGame(gameState.gameId);
         } catch (error) {
-            console.error("Failed to convert to multiplayer:", error);
-        } finally {
-            this.synced.isConverting = false;
+            console.error("Failed to start multiplayer game:", error);
         }
     };
+
+    connectToMultiplayer = async (code: string, options?: { autoStartAsHost?: boolean }) => {
+        if (isNode()) return;
+        const autoStartAsHost = options?.autoStartAsHost ?? false;
+
+        if (this.connectionManager) {
+            this.connectionManager.cleanup();
+            this.connectionManager = undefined;
+        }
+
+        gameState.isMultiplayer = true;
+        gameState.gameId = code;
+        joinGameIdURL.value = code;
+        const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
+        window.history.pushState({}, "", newUrl);
+
+        this.connectionManager = new ConnectionManager({
+            connect: async () => {
+                resetRPCClient();
+                const newRpc = getRPCClient();
+                await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration);
+            },
+            disconnect: () => {
+                resetRPCClient();
+            },
+            callbacks: {
+                onStatusChange: (status) => {
+                    gameState.connectionStatus = status;
+                    if (status === "disconnected" || status === "error") {
+                        this.startReconnectCountdown();
+                    } else {
+                        this.stopReconnectCountdown();
+                    }
+                },
+                onConnect: () => {
+                    if (!autoStartAsHost) return;
+                    setTimeout(() => { void this.tryStartGameAsHost(); }, 250);
+                },
+            }
+        });
+        await this.connectionManager.connect();
+    };
+
+    startOrJoinMultiplayer = async () => {
+        if (isNode()) return;
+        this.synced.isConverting = true;
+        this.synced.joining = true;
+        this.synced.menuError = undefined;
+        try {
+            if (!gameState.isMultiplayer || !gameState.gameId) {
+                const code = (this.synced.joinGameId || randomGameCode()).toUpperCase();
+                await this.connectToMultiplayer(code, { autoStartAsHost: true });
+            } else {
+                await this.tryStartGameAsHost();
+            }
+        } finally {
+            this.synced.isConverting = false;
+            this.synced.joining = false;
+        }
+    };
+
 
     enterTestMode = () => {
         gameState.isMultiplayer = true;
@@ -410,6 +483,486 @@ export class LetterFastGame extends preact.Component {
         this.synced.linkCopied = true;
 
         this.redraw();
+    };
+
+    voiceController: VoiceController | undefined;
+    voiceQueue: { token: VoiceToken; tokensRef: VoiceToken[] }[] = [];
+    voiceProcessing = false;
+    voiceAnimating = false;
+    // Index in voiceTokens where the *current* utterance's positional
+    // tokens start. Tokens before this index are from past utterances
+    // and are frozen. Tokens at/after this index mirror the current
+    // partial transcript by position — when the model revises a word,
+    // we replace the token at the matching index (and undo its play
+    // if it had one). When vosk commits the utterance, we just bump
+    // this index forward.
+    voiceUtteranceStartIndex = 0;
+    // Wall-clock time of the last speech-end event. When the next
+    // speech-start fires, if the gap exceeds VOICE_RESET_GAP_MS we
+    // treat that as a brand-new phrase and wipe the prior tokens.
+    // Below the threshold, prior tokens stay so a quick breath in the
+    // middle of a sentence doesn't reset the whole transcript.
+    voiceLastSpeechEndAt = 0;
+    // Letters from words committed so far in the current speech session,
+    // and from the in-flight partial. Substring-matched against every
+    // playable board word so users can spell letters, recover from ASR
+    // splits, and get all sub-word matches in one breath ("vahamin" →
+    // HAM, HAMIN, AMIN, …). These extra plays are append-only and are
+    // not undone when the partial revises.
+    voiceCommittedLetters = "";
+    voicePartialLetters = "";
+
+    toggleVoiceMode = () => {
+        if (this.synced.voiceModeOn || this.synced.voiceLoading) {
+            void this.stopVoiceMode();
+        } else {
+            void this.startVoiceMode();
+        }
+    };
+
+    startVoiceMode = async () => {
+        console.log("[voice] startVoiceMode requested");
+        if (isNode()) return;
+        if (this.synced.voiceModeOn || this.synced.voiceLoading) {
+            console.log("[voice] start ignored: already on/loading");
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.synced.voiceError = "Microphone is not available in this browser.";
+            return;
+        }
+        this.synced.voiceError = undefined;
+        this.synced.voiceLoading = true;
+        this.synced.voiceStatus = "Loading…";
+        this.synced.voiceTranscriptText = "";
+        this.synced.voiceTranscriptListening = false;
+        this.synced.voiceTokens = [];
+        this.voiceQueue = [];
+
+        if (!this.voiceController) this.voiceController = new VoiceController();
+
+        // Kick off the CMU dictionary fetch in parallel with model loading so
+        // homophone lookups are ready by the time the user starts speaking.
+        void preloadHomophoneDict().catch(() => { /* logged inside */ });
+
+        try {
+            await this.voiceController.start({
+                onSpeechStart: () => this.handleVoiceSpeechStart(),
+                onPartialTranscript: (text: string) => this.handleVoicePartial(text),
+                onCommittedWord: (word: StreamingWord) => this.handleVoiceCommittedWord(word),
+                onSpeechEnd: () => this.handleVoiceSpeechEnd(),
+                onStatus: (status: string) => {
+                    console.log("[voice] status:", status);
+                    this.synced.voiceStatus = status;
+                },
+                onError: (err: string) => {
+                    console.warn("[voice] error from controller:", err);
+                    this.synced.voiceError = err;
+                },
+            });
+            this.synced.voiceModeOn = true;
+            this.synced.voiceLoading = false;
+            console.log("[voice] startVoiceMode succeeded");
+        } catch (e) {
+            console.error("[voice] startVoiceMode failed:", e);
+            this.synced.voiceLoading = false;
+            this.synced.voiceModeOn = false;
+            if (!this.synced.voiceError) {
+                this.synced.voiceError = e instanceof Error ? e.message : String(e);
+            }
+        }
+    };
+
+    stopVoiceMode = async () => {
+        console.log("[voice] stopVoiceMode requested");
+        this.synced.voiceModeOn = false;
+        this.synced.voiceLoading = false;
+        this.synced.voiceStatus = undefined;
+        this.synced.voiceTranscriptText = "";
+        this.synced.voiceTranscriptListening = false;
+        this.synced.voiceTokens = [];
+        this.voiceUtteranceStartIndex = 0;
+        this.voiceQueue = [];
+        this.voiceCommittedLetters = "";
+        this.voicePartialLetters = "";
+        if (this.voiceController) {
+            try {
+                this.voiceController.stop();
+            } catch (e) {
+                console.error("[voice] stop threw:", e);
+            }
+        }
+    };
+
+    private handleVoiceSpeechStart = () => {
+        this.synced.voiceTranscriptListening = true;
+        this.synced.voiceTranscriptText = "";
+        // If the user paused for ≥ VOICE_RESET_GAP_MS, treat this as a
+        // fresh phrase and wipe the prior token list. Anything shorter
+        // (a quick breath, a brief hesitation) keeps the prior tokens
+        // so they accumulate into the same phrase. NB: the very first
+        // speech start has voiceLastSpeechEndAt === 0, in which case we
+        // skip the reset and preserve the empty initial state.
+        if (this.voiceLastSpeechEndAt > 0) {
+            const gap = Date.now() - this.voiceLastSpeechEndAt;
+            if (gap >= VOICE_RESET_GAP_MS) {
+                console.log(`[voice] ${gap}ms gap since last speech — clearing prior tokens`);
+                this.synced.voiceTokens = [];
+            }
+        }
+        this.voiceUtteranceStartIndex = this.synced.voiceTokens.length;
+        this.voiceCommittedLetters = "";
+        this.voicePartialLetters = "";
+    };
+
+    private handleVoiceSpeechEnd = () => {
+        // Lock the current utterance's tokens in place — the next
+        // utterance's positional region starts after them.
+        this.synced.voiceTranscriptListening = false;
+        this.voiceUtteranceStartIndex = this.synced.voiceTokens.length;
+        this.voiceLastSpeechEndAt = Date.now();
+        this.voiceCommittedLetters = "";
+        this.voicePartialLetters = "";
+    };
+
+    private handleVoicePartial = (text: string) => {
+        // Mirror the partial's words into the positional region. When the
+        // model revises a word at position i, we replace the token at
+        // index `start + i` and undo any play that token had — so
+        // "cat" becoming "cap" doesn't leave both as tokens.
+        this.synced.voiceTranscriptListening = false;
+        const newWords = (text || "").toLowerCase().split(/[^a-z]+/).filter(w => w.length > 0);
+        const tokens = this.synced.voiceTokens;
+        const start = this.voiceUtteranceStartIndex;
+
+        // Trim any trailing positional tokens that no longer have a
+        // counterpart in the new partial (the partial got shorter or a
+        // word was removed). Pop from the end so indices stay stable.
+        while (tokens.length > start + newWords.length) {
+            const removed = tokens.pop();
+            if (removed) this.undoTokenPlay(removed);
+        }
+
+        // Replace / insert each position.
+        for (let i = 0; i < newWords.length; i++) {
+            const idx = start + i;
+            const newWord = newWords[i];
+            const oldTok = tokens[idx];
+            if (oldTok && oldTok.word === newWord) continue;
+            if (oldTok) this.undoTokenPlay(oldTok);
+            const token: VoiceToken = {
+                word: newWord,
+                status: newWord.length < 3 ? "not-word" : "pending",
+            };
+            if (idx < tokens.length) tokens[idx] = token;
+            else tokens.push(token);
+            if (token.status === "pending") {
+                this.voiceQueue.push({ token, tokensRef: tokens });
+                void this.flushVoiceQueue();
+            }
+        }
+
+        this.voicePartialLetters = (text || "").toLowerCase().replace(/[^a-z]+/g, "");
+        void this.checkLetterBuffer();
+    };
+
+    /** Undo the on-board play attached to a token that's about to be
+     *  replaced (because the model revised what it heard at this
+     *  position). For singleplayer we remove the matched word and
+     *  refund points. For multiplayer we can only emit a warning —
+     *  the server already accepted the word and there's no withdraw
+     *  RPC. */
+    private undoTokenPlay = (token: VoiceToken) => {
+        if (token.status !== "ok") return;
+        const upper = token.word.toUpperCase();
+        if (!gameState.matchedWordsSet.has(upper)) return;
+        if (gameState.isMultiplayer) {
+            console.warn("[voice] partial revised away from played word; can't undo on server:", token.word);
+            return;
+        }
+        const idx = gameState.matchedWords.findIndex(w => w.word === upper);
+        if (idx !== -1) gameState.matchedWords.splice(idx, 1);
+        gameState.matchedWordsSet.delete(upper);
+        gameState.score = Math.max(0, gameState.score - (token.points ?? 0));
+        console.log(`[voice] undid play of ${token.word} (refunded ${token.points ?? 0})`);
+    };
+
+    private handleVoiceCommittedWord = (word: StreamingWord) => {
+        const cleaned = (word.word || "").toLowerCase().replace(/[^a-z]+/g, "");
+        if (!cleaned) return;
+        console.log("[voice] committed:", cleaned);
+        // The committed word is already represented in the positional
+        // region by the most recent partial (vosk's commit text matches
+        // its final partial). Just roll the letters forward.
+        this.voiceCommittedLetters = (this.voiceCommittedLetters + cleaned).slice(-128);
+        this.voicePartialLetters = "";
+        void this.checkLetterBuffer();
+    };
+
+    /** Substring-match every playable word on the board against the
+     *  running letter buffer (committed letters + the live partial),
+     *  playing each match exactly once. Runs on every partial update,
+     *  not just on commit, so reactions happen mid-utterance. Plays
+     *  every match — if the user says "vahamin" we get HAM, HAMIN,
+     *  AMIN, etc. (whichever are real words on the board).
+     *
+     *  Letter-buffer matches are inserted as "frozen extras" at the
+     *  *start* of the current utterance's region, and the positional
+     *  start index is bumped past them, so subsequent partial updates
+     *  don't try to trim or revise them. */
+    private checkLetterBuffer = async () => {
+        if (gameState.status !== "playing") return;
+        const buf = this.voiceCommittedLetters + this.voicePartialLetters;
+        if (buf.length < 3) return;
+        const wordSet = await getWordSet();
+        const boardWords = this.collectBoardWords();
+        // Sorting by length only affects the order plays happen in;
+        // every matching word still plays exactly once thanks to
+        // matchedWordsSet. Longer first feels more natural visually.
+        boardWords.sort((a, b) => b.length - a.length);
+        for (const cand of boardWords) {
+            if (cand.length < 3) continue;
+            if (gameState.matchedWordsSet.has(cand.toUpperCase())) continue;
+            if (!buf.includes(cand)) continue;
+            const r = await this.attemptWord(cand, wordSet);
+            if (r.status !== "ok") continue;
+            console.log(`[voice] letter-buffer match: ${cand} found in "${buf}"`);
+            const tokens = this.synced.voiceTokens;
+            const tok: VoiceToken = { word: cand, status: "pending" };
+            tokens.splice(this.voiceUtteranceStartIndex, 0, tok);
+            this.voiceUtteranceStartIndex++;
+            this.voiceQueue.push({ token: tok, tokensRef: tokens });
+            void this.flushVoiceQueue();
+        }
+    };
+
+    private updateVoiceToken = (
+        tokensRef: VoiceToken[],
+        token: VoiceToken,
+        status: VoiceTokenStatus,
+        points?: number,
+    ): VoiceToken => {
+        // Only mutate if these tokens are still the current ones — if the
+        // user has started a new utterance, voiceTokens has been replaced
+        // with a fresh array and we should leave the orphaned one alone.
+        if (this.synced.voiceTokens !== tokensRef) return token;
+        const idx = tokensRef.indexOf(token);
+        if (idx === -1) return token;
+        const next = { ...token, status, points };
+        tokensRef[idx] = next;
+        return next;
+    };
+
+    private replaceVoiceTokenWord = (
+        tokensRef: VoiceToken[],
+        token: VoiceToken,
+        newWord: string,
+    ): VoiceToken => {
+        if (this.synced.voiceTokens !== tokensRef) return token;
+        const idx = tokensRef.indexOf(token);
+        if (idx === -1) return token;
+        const next = { ...token, word: newWord };
+        tokensRef[idx] = next;
+        return next;
+    };
+
+    private disposeVoiceRecognition = () => {
+        console.log("[voice] disposeVoiceRecognition");
+        if (this.voiceController) {
+            try { this.voiceController.stop(); } catch (e) { console.warn("[voice] dispose stop failed:", e); }
+            this.voiceController = undefined;
+        }
+    };
+
+    private flushVoiceQueue = async () => {
+        if (this.voiceProcessing) return;
+        this.voiceProcessing = true;
+        try {
+            while (this.voiceQueue.length > 0) {
+                const item = this.voiceQueue.shift()!;
+                await this.tryVoiceWord(item.token, item.tokensRef);
+            }
+        } finally {
+            this.voiceProcessing = false;
+        }
+    };
+
+    private collectBoardWords(): string[] {
+        const out: string[] = [];
+        const seen = new Set<string>();
+        for (const set of gameState.cellToWords.values()) {
+            for (const w of set) {
+                const lower = w.toLowerCase();
+                if (seen.has(lower)) continue;
+                seen.add(lower);
+                out.push(lower);
+            }
+        }
+        return out;
+    }
+
+    private attemptWord = async (
+        word: string,
+        wordSet: Set<string>,
+    ): Promise<AttemptResult> => {
+        if (word.length < 3) return { status: "not-word" };
+        if (!wordSet.has(word.toLowerCase())) return { status: "not-word" };
+        const upper = word.toUpperCase();
+        const paths = findPathsForWord(gameState.grid, upper);
+        if (paths.length === 0) return { status: "not-on-board" };
+        if (gameState.matchedWordsSet.has(upper)) return { status: "already" };
+        let bestPath = paths[0];
+        let bestScore = calculateWordScoreForGrid(gameState.grid, bestPath);
+        for (let i = 1; i < paths.length; i++) {
+            const score = calculateWordScoreForGrid(gameState.grid, paths[i]);
+            if (score > bestScore) { bestScore = score; bestPath = paths[i]; }
+        }
+        return { status: "ok", word, bestPath, bestScore };
+    };
+
+    private tryVoiceWord = async (token: VoiceToken, tokensRef: VoiceToken[]) => {
+        let currentToken = token;
+        const word = token.word;
+        const set = (status: VoiceTokenStatus, points?: number) => {
+            currentToken = this.updateVoiceToken(tokensRef, currentToken, status, points);
+        };
+
+        if (!this.synced.voiceModeOn) { console.log("[voice] skip", word, "(voice off)"); set("skipped"); return; }
+        if (word.length < 3) { set("not-word"); return; }
+
+        const wordSet = await getWordSet();
+
+        // 1. Try the spoken word.
+        let trial = await this.attemptWord(word, wordSet);
+
+        // 2. If it didn't work, try homophones. Pick the highest-scoring
+        //    matching homophone (e.g. user says "knight", board has "night").
+        if (trial.status !== "ok") {
+            const homos = await getHomophones(word);
+            let best: AttemptResult | undefined;
+            for (const homo of homos) {
+                const r = await this.attemptWord(homo, wordSet);
+                if (r.status === "ok") {
+                    if (!best || best.status !== "ok" || r.bestScore > best.bestScore) {
+                        best = r;
+                    }
+                }
+            }
+            if (best && best.status === "ok") {
+                console.log("[voice] homophone match:", word, "→", best.word, "(score", best.bestScore + ")");
+                currentToken = this.replaceVoiceTokenWord(tokensRef, currentToken, best.word);
+                trial = best;
+            }
+        }
+
+        // 2b. Still no match — fall back to fuzzy phonetic matching against
+        //     the words actually playable on this board. Catches near-rhymes
+        //     like "tee"↔"teed" and ASR splits like "diff users"↔"diffusers"
+        //     that strict homophone lookup misses.
+        if (trial.status !== "ok") {
+            const boardWords = this.collectBoardWords();
+            const fuzzy = await findPhoneticMatches(word, boardWords, { maxDistanceRatio: 0.4, topN: 6 });
+            let best: AttemptResult | undefined;
+            for (const f of fuzzy) {
+                const r = await this.attemptWord(f, wordSet);
+                if (r.status === "ok") {
+                    if (!best || best.status !== "ok" || r.bestScore > best.bestScore) {
+                        best = r;
+                    }
+                }
+            }
+            if (best && best.status === "ok") {
+                console.log("[voice] fuzzy match:", word, "→", best.word, "(score", best.bestScore + ")");
+                currentToken = this.replaceVoiceTokenWord(tokensRef, currentToken, best.word);
+                trial = best;
+            }
+        }
+
+        if (trial.status !== "ok") {
+            console.log("[voice] skip", word, "(" + trial.status + ")");
+            set(trial.status);
+            return;
+        }
+
+        // 3. Auto-start the game on first real word, then re-validate the
+        //    chosen word against the (possibly new) grid.
+        if (gameState.status !== "playing") {
+            const started = await this.autoStartFromVoice(trial.word);
+            if (!started) { set("skipped"); return; }
+            const reTrial = await this.attemptWord(trial.word, wordSet);
+            if (reTrial.status !== "ok") {
+                console.log("[voice]", trial.word, "no longer playable after game start (" + reTrial.status + ")");
+                set(reTrial.status);
+                return;
+            }
+            trial = reTrial;
+        }
+
+        if (this.synced.drawing) { console.log("[voice] skip", trial.word, "(user drawing)"); set("skipped"); return; }
+        if (Date.now() < gameState.timeoutUntil) { console.log("[voice] skip", trial.word, "(in timeout)"); set("skipped"); return; }
+
+        console.log("[voice] applying", trial.word, "(score " + trial.bestScore + ")");
+        await this.playVoicePath(trial.bestPath);
+        set("ok", trial.bestScore);
+    };
+
+    private autoStartFromVoice = async (word: string): Promise<boolean> => {
+        if (gameState.isMultiplayer) {
+            if (!gameState.gameId || gameState.myPlayerIndex !== 0) {
+                console.log("[voice] cannot auto-start MP game (not host)");
+                return false;
+            }
+            console.log("[voice] auto-starting MP game from word", word);
+            try {
+                const rpc = getRPCClient();
+                await rpc.startGame(gameState.gameId);
+            } catch (e) {
+                console.error("[voice] failed to start MP game:", e);
+                return false;
+            }
+            // Wait briefly for the server's onGameStart broadcast to land.
+            for (let attempt = 0; attempt < 50 && gameState.status !== "playing"; attempt++) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+            if (gameState.status !== "playing") {
+                console.warn("[voice] MP game did not transition to 'playing' after start");
+                return false;
+            }
+            return true;
+        }
+        console.log("[voice] auto-starting SP game from word", word);
+        try {
+            await startGame(false);
+        } catch (e) {
+            console.error("[voice] failed to start SP game:", e);
+            return false;
+        }
+        return gameState.status === "playing";
+    };
+
+    private playVoicePath = async (path: { row: number; col: number }[]) => {
+        this.voiceAnimating = true;
+        try {
+            this.synced.selectedCells = [];
+            this.synced.currentPos = cellCenter(path[0].row, path[0].col);
+            for (const cell of path) {
+                this.synced.selectedCells.push(cell);
+                this.synced.currentPos = cellCenter(cell.row, cell.col);
+                this.redraw();
+                await new Promise(r => setTimeout(r, 30));
+            }
+            try {
+                await this.processSelectedWord();
+            } catch (e) {
+                console.error("Voice submit failed:", e);
+            }
+            await new Promise(r => setTimeout(r, 200));
+        } finally {
+            this.synced.selectedCells = [];
+            this.synced.currentPos = undefined;
+            this.redraw();
+            this.voiceAnimating = false;
+        }
     };
 
     leaveMultiplayer = () => {
@@ -551,6 +1104,7 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
             this.synced.cfgGameMode = saved.gameMode === "cooperative" ? "cooperative" : "competitive";
             this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? 0.5) * 100);
+            this.synced.cfgAutoBestPath = saved.autoBestPath !== false;
         } else {
             this.synced.cfgWidth = gameState.gridWidth;
             this.synced.cfgHeight = gameState.gridHeight;
@@ -572,6 +1126,7 @@ export class LetterFastGame extends preact.Component {
             showTotalPossibleScore: this.synced.cfgShowTotal,
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
+            autoBestPath: this.synced.cfgAutoBestPath,
         });
         applySettings({
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
@@ -611,23 +1166,157 @@ export class LetterFastGame extends preact.Component {
         await startGame();
     };
 
+    toggleMenu = () => {
+        if (this.synced.menuOpen) {
+            this.synced.menuOpen = false;
+            return;
+        }
+        this.synced.menuOpen = true;
+        // The textarea is uncontrolled: it picks up its initial value from
+        // `defaultValue={this.gridToText(...)}` on mount when the menu opens.
+        this.synced.boardImportError = undefined;
+        this.synced.boardImportCopied = false;
+    };
+
+    private gridToText = (grid: GridCell[][]): string => {
+        return grid.map(row => row.map(c => (c.letter || "").toUpperCase()).join("")).join("\n");
+    };
+
+    /** Encode a board's letters for a URL: rows joined by "-". E.g.
+     *  "ABCD-EFGH-IJKL-MNOP". Short, human-readable, and a valid URL
+     *  query value without escaping. */
+    private gridToUrlEncoded = (grid: GridCell[][]): string => {
+        return grid.map(row => row.map(c => (c.letter || "").toUpperCase()).join("")).join("-");
+    };
+
+    private buildBoardShareUrl = (grid: GridCell[][]): string => {
+        if (typeof window === "undefined") return "";
+        const code = this.gridToUrlEncoded(grid);
+        return `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&board=${code}`;
+    };
+
+    /** Parse rows of letters out of arbitrary input — accepts:
+     *    - the raw multi-line letter grid (one row per line),
+     *    - a "board=ABCD-EFGH-…" URL-encoded value,
+     *    - a full URL containing `?board=ABCD-EFGH-…` or `&board=…`.
+     *  Returns the parsed rows, or an error string for the user. */
+    private parseBoardInput = (raw: string): { rows: string[] } | { error: string } => {
+        let text = (raw || "").trim();
+        // Pull a board= param out of a URL-shaped input. Match `board=`
+        // followed by the value up to the next `&` or end of string.
+        const urlMatch = /[?&]board=([^&\s#]+)/i.exec(text);
+        if (urlMatch) text = decodeURIComponent(urlMatch[1]);
+        let rows: string[];
+        if (text.includes("\n")) {
+            rows = text.split(/\r?\n/);
+        } else if (text.includes("-")) {
+            rows = text.split("-");
+        } else {
+            rows = [text];
+        }
+        rows = rows
+            .map(line => line.toUpperCase().replace(/[^A-Z]/g, ""))
+            .filter(line => line.length > 0);
+        if (rows.length < 2 || rows.length > 10) {
+            return { error: `Board must have 2–10 rows (got ${rows.length}).` };
+        }
+        const width = rows[0].length;
+        if (width < 2 || width > 10) {
+            return { error: `Each row must have 2–10 letters (got ${width}).` };
+        }
+        if (!rows.every(r => r.length === width)) {
+            return { error: "All rows must have the same number of letters." };
+        }
+        return { rows };
+    };
+
+    copyBoardText = () => {
+        // The textarea may have been edited; honor the live value when
+        // building the share URL so users can tweak letters first.
+        const raw = this.boardTextareaRef?.value;
+        let parsed: { rows: string[] } | { error: string } | undefined;
+        if (raw && raw.trim().length > 0) {
+            parsed = this.parseBoardInput(raw);
+        }
+        let url: string;
+        if (parsed && "rows" in parsed) {
+            // Re-encode whatever's in the textarea.
+            const encoded = parsed.rows.join("-");
+            url = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&board=${encoded}`;
+        } else {
+            url = this.buildBoardShareUrl(gameState.grid);
+        }
+        if (this.copyTextToClipboard(url)) {
+            this.synced.boardImportCopied = true;
+            setTimeout(() => { this.synced.boardImportCopied = false; }, 1500);
+        }
+    };
+
+    importBoardFromText = async () => {
+        if (gameState.isMultiplayer) {
+            this.synced.boardImportError = "Cannot import board in multiplayer.";
+            return;
+        }
+        const raw = this.boardTextareaRef?.value ?? "";
+        const parsed = this.parseBoardInput(raw);
+        if ("error" in parsed) {
+            this.synced.boardImportError = parsed.error;
+            return;
+        }
+        await this.applyImportedBoard(parsed.rows);
+        this.synced.menuOpen = false;
+    };
+
+    private applyImportedBoard = async (rows: string[]): Promise<void> => {
+        const width = rows[0].length;
+        const { LETTER_POINTS } = await import("./GameState");
+        const { getWordTrie, findAllWordsInGrid, calculateTotalScoreForWords } = await import("./GridGenerator");
+
+        const newGrid: GridCell[][] = rows.map(row => Array.from(row).map((letter): GridCell => ({
+            letter,
+            points: LETTER_POINTS[letter] || 1,
+            multiplier: 1,
+        })));
+
+        const trie = await getWordTrie();
+        const result = findAllWordsInGrid(newGrid, trie);
+        const cellToWords = new Map<string, Set<string>>();
+        for (const [word, cells] of result.wordPaths) {
+            const upperWord = word.toUpperCase();
+            for (const cellKey of cells) {
+                let wordsSet = cellToWords.get(cellKey);
+                if (!wordsSet) { wordsSet = new Set<string>(); cellToWords.set(cellKey, wordsSet); }
+                wordsSet.add(upperWord);
+            }
+        }
+
+        gameState.gridWidth = width;
+        gameState.gridHeight = rows.length;
+        gameState.grid = newGrid;
+        gameState.cellToWords = cellToWords;
+        gameState.totalPossibleWords = result.words.size;
+        gameState.totalPossibleScore = calculateTotalScoreForWords(newGrid, result.words, trie);
+
+        gameState.status = "ready";
+        gameState.score = 0;
+        gameState.matchedWords = [];
+        gameState.matchedWordsSet.clear();
+        gameState.timeRemaining = gameState.gameDuration;
+        gameState.startTime = undefined;
+
+        this.synced.cfgWidth = width;
+        this.synced.cfgHeight = rows.length;
+        this.synced.boardImportError = undefined;
+        console.log(`[board-import] applied ${width}x${rows.length} grid, ${result.words.size} words possible`);
+    };
+
     onJoinGameFromMenu = async () => {
         if (!this.synced.joinGameId) {
             this.synced.menuError = "Please enter a game ID";
             return;
         }
-        this.synced.joining = true;
-        this.synced.menuError = undefined;
-        try {
-            gameState.gameId = this.synced.joinGameId.toUpperCase();
-            gameState.isMultiplayer = true;
-            joinGameIdURL.value = this.synced.joinGameId.toUpperCase();
-            this.synced.menuOpen = false;
-        } catch (error) {
-            this.synced.menuError = error instanceof Error ? error.message : String(error);
-        } finally {
-            this.synced.joining = false;
-        }
+        this.synced.menuOpen = false;
+        await this.startOrJoinMultiplayer();
     };
 
     async componentDidMount() {
@@ -635,6 +1324,20 @@ export class LetterFastGame extends preact.Component {
         const urlCode = joinGameIdURL.value;
         if (urlCode) {
             this.synced.joinGameId = urlCode.toUpperCase();
+        }
+
+        // ?board=ABCD-EFGH-… in the URL → import the board on load.
+        // Cleared from the URL after applying so subsequent shares don't
+        // re-import on every refresh.
+        if (boardURL.value) {
+            const encoded = boardURL.value;
+            boardURL.reset();
+            const parsed = this.parseBoardInput(encoded);
+            if ("rows" in parsed) {
+                await this.applyImportedBoard(parsed.rows);
+            } else {
+                console.warn("[board-import] URL board param invalid:", parsed.error);
+            }
         }
         if (!isNode()) {
             this.calculateScale();
@@ -720,43 +1423,14 @@ export class LetterFastGame extends preact.Component {
 
         const joinGameId = joinGameIdURL.value;
         if (joinGameId && !gameState.gameId) {
-            try {
-                gameState.gameId = joinGameId.toUpperCase();
-                gameState.isMultiplayer = true;
-
-                const { getSavedConfigOrDefaults } = await import("./GameConfig");
-                const defaults = getSavedConfigOrDefaults();
-
-                this.connectionManager = new ConnectionManager({
-                    connect: async () => {
-                        resetRPCClient();
-                        const rpc = getRPCClient();
-                        await rpc.joinGame(joinGameId.toUpperCase(), defaults.gridWidth, defaults.gridHeight, defaults.gameDuration);
-                    },
-                    disconnect: () => {
-                        resetRPCClient();
-                    },
-                    callbacks: {
-                        onStatusChange: (status) => {
-                            gameState.connectionStatus = status;
-                            if (status === "disconnected" || status === "error") {
-                                this.startReconnectCountdown();
-                            } else {
-                                this.stopReconnectCountdown();
-                            }
-                        },
-                    }
-                });
-
-                await this.connectionManager.connect();
-            } catch (error) {
-                console.error("Failed to join game:", error);
-            }
+            await this.connectToMultiplayer(joinGameId.toUpperCase(), { autoStartAsHost: true });
         }
     }
 
     componentWillUnmount() {
         cleanup();
+        void this.stopVoiceMode();
+        this.disposeVoiceRecognition();
         this.stopReconnectCountdown();
         if (this.gridSizeReactionDisposer) {
             this.gridSizeReactionDisposer();
@@ -973,23 +1647,62 @@ export class LetterFastGame extends preact.Component {
             return;
         }
 
+        // Auto-best-path: re-pick the cells for this word so the user
+        // always gets the maximum score available for whatever they
+        // spelled, regardless of which exact cells they traced.
+        if (this.synced.cfgAutoBestPath) {
+            const upper = word.toUpperCase();
+            const allPaths = findPathsForWord(gameState.grid, upper);
+            if (allPaths.length > 1) {
+                let bestPath = this.synced.selectedCells;
+                let bestScore = calculateWordScoreForGrid(gameState.grid, bestPath);
+                for (const p of allPaths) {
+                    const s = calculateWordScoreForGrid(gameState.grid, p);
+                    if (s > bestScore) { bestScore = s; bestPath = p; }
+                }
+                if (bestPath !== this.synced.selectedCells) {
+                    console.log(`[autoBestPath] ${upper}: rerouted to higher-scoring path (${bestScore})`);
+                    this.synced.selectedCells = bestPath;
+                }
+            }
+        }
+
         if (gameState.isMultiplayer) {
             if (!isNode() && gameState.gameId) {
                 const rpc = getRPCClient();
-                const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), this.synced.selectedCells);
-                if (result.points > 0) {
-                    const upperWord = word.toUpperCase();
-                    if (gameState.gameMode === "cooperative") {
-                        // server's onCoopWord broadcast attributes & adds globally; just feedback here
-                        if (!gameState.matchedWordsSet.has(upperWord)) {
-                            gameState.matchedWords.push({ word: upperWord, points: result.points, playerIndex: gameState.myPlayerIndex });
+                const cells = this.synced.selectedCells.slice();
+                try {
+                    const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), cells);
+                    if (result.points > 0) {
+                        const upperWord = word.toUpperCase();
+                        if (gameState.gameMode === "cooperative") {
+                            // server's onCoopWord broadcast attributes & adds globally; just feedback here
+                            if (!gameState.matchedWordsSet.has(upperWord)) {
+                                gameState.matchedWords.push({ word: upperWord, points: result.points, playerIndex: gameState.myPlayerIndex });
+                                gameState.matchedWordsSet.add(upperWord);
+                            }
+                        } else {
+                            gameState.matchedWords.push({ word: upperWord, points: result.points });
                             gameState.matchedWordsSet.add(upperWord);
                         }
-                    } else {
-                        gameState.matchedWords.push({ word: upperWord, points: result.points });
-                        gameState.matchedWordsSet.add(upperWord);
+                        this.showWordAcceptedFeedback(result.points);
                     }
-                    this.showWordAcceptedFeedback(result.points);
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (gameState.gameMode === "competitive-shared" && msg.startsWith("BLOCKED:")) {
+                        // Another player already picked this word — show
+                        // it in our list with strikethrough and flash the
+                        // cells red so it's obvious what happened.
+                        const upperWord = word.toUpperCase();
+                        if (!gameState.matchedWordsSet.has(upperWord)) {
+                            gameState.matchedWords.push({ word: upperWord, points: 0, blocked: true });
+                            gameState.matchedWordsSet.add(upperWord);
+                        }
+                        this.flashBlockedCells(cells);
+                        this.vibrateLong();
+                    } else {
+                        console.warn("submitWord failed:", err);
+                    }
                 }
             }
             return;
@@ -1165,11 +1878,25 @@ export class LetterFastGame extends preact.Component {
                 >
                     👥
                 </button>
+                <button
+                    onClick={this.toggleVoiceMode}
+                    title={this.synced.voiceError
+                        || (this.synced.voiceLoading ? `Loading voice model… ${this.synced.voiceStatus || ""}`.trim()
+                            : this.synced.voiceModeOn ? `Voice mode on (${this.synced.voiceStatus || "listening"}) — click to turn off`
+                                : "Voice mode off (click to turn on)")
+                    }
+                    className={css.fontSize(20).pad2(4, 8)
+                        + (this.synced.voiceModeOn ? css.hsl(120, 50, 25).colorhsl(0, 0, 100) : "")
+                        + (this.synced.voiceLoading ? css.hsl(45, 60, 25).colorhsl(0, 0, 100) : "")
+                    }
+                >
+                    {this.synced.voiceLoading ? "⏳" : this.synced.voiceModeOn ? "🎤" : "🎙️"}
+                </button>
                 {gameState.lastGameOverState && (
                     <button
                         onClick={() => {
                             const s = gameState.lastGameOverState;
-                            const cb = gameState.lastGameOverOnPlayAgain || (() => {});
+                            const cb = gameState.lastGameOverOnPlayAgain || (() => { });
                             if (s) showGameOver(s, cb);
                         }}
                         title="Show last game summary"
@@ -1179,7 +1906,7 @@ export class LetterFastGame extends preact.Component {
                     </button>
                 )}
                 <button
-                    onClick={() => { this.synced.menuOpen = !this.synced.menuOpen; }}
+                    onClick={this.toggleMenu}
                     title="Menu"
                     className={css.fontSize(24).pad2(4, 10) + ""}
                 >
@@ -1198,18 +1925,77 @@ export class LetterFastGame extends preact.Component {
             );
         }
         if (!gameState.isMultiplayer || gameState.players.length === 0) return undefined;
+
+        const players = gameState.players.map((p, originalIndex) => ({
+            p,
+            originalIndex,
+            score: Math.max(0, p.score || 0),
+        }));
+        const totalScore = players.reduce((s, x) => s + x.score, 0);
+        const sorted = players.slice().sort((a, b) =>
+            b.score - a.score || a.originalIndex - b.originalIndex,
+        );
+
+        // Each player gets a minimum slice so their letter stays readable
+        // even when their score is 0; the rest is split by score share.
+        const N = sorted.length;
+        const MIN_PCT = Math.min(12, 100 / N);
+        const remainingPct = Math.max(0, 100 - MIN_PCT * N);
+        const pcts = sorted.map(entry =>
+            totalScore === 0 ? 100 / N : MIN_PCT + (entry.score / totalScore) * remainingPct,
+        );
+        const lefts: number[] = [];
+        let acc = 0;
+        for (const pct of pcts) { lefts.push(acc); acc += pct; }
+
+        // You = green; everyone else lives on the blue → purple arc, with
+        // a stable hue per original index so colors don't change as scores
+        // shift. Spread by a relatively-prime step so adjacent players
+        // stay visually distinct.
+        const NON_YOU_HUE_BASE = 200; // blue
+        const NON_YOU_HUE_RANGE = 90; // up to 290 (purple)
+        const hueFor = (idx: number, isYou: boolean) => {
+            if (isYou) return 135;
+            return NON_YOU_HUE_BASE + Math.round((idx * 47) % NON_YOU_HUE_RANGE);
+        };
+
+        const BAR_HEIGHT = 28;
         return (
-            <div className={css.hbox(10).wrap.colorhsl(0, 0, 100)}>
-                {gameState.players.map((p, index) => {
-                    const letter = String.fromCharCode(65 + index);
-                    const isYou = index === gameState.myPlayerIndex;
-                    const isHost = index === 0;
+            <div
+                className={css.relative.fillWidth.height(BAR_HEIGHT).borderRadius(6).overflowHidden + ""}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                }}
+            >
+                {sorted.map((entry, sortIdx) => {
+                    const letter = String.fromCharCode(65 + entry.originalIndex);
+                    const isYou = entry.originalIndex === gameState.myPlayerIndex;
+                    const isHost = entry.originalIndex === 0;
+                    const hue = hueFor(entry.originalIndex, isYou);
                     return (
-                        <div key={p.id} className={css.hbox(3).alignItems("center").fontSize(14)}>
-                            {isHost && <span title="Host">👑</span>}
-                            {isYou && <span title="You">👤</span>}
-                            <span className={css.fontWeight("bold") + ""}>{letter}</span>
-                            <span>{p.score}</span>
+                        <div
+                            key={entry.p.id || `idx-${entry.originalIndex}`}
+                            title={`${isHost ? "Host " : ""}${isYou ? "(you) " : ""}${letter}: ${entry.score}`}
+                            className={css.absolute.hbox(4).alignItems("center").justifyContent("center")
+                                .colorhsl(0, 0, 100).fontSize(13).fontWeight("bold").overflowHidden
+                                + ""}
+                            style={{
+                                top: 0,
+                                height: `${BAR_HEIGHT}px`,
+                                left: `${lefts[sortIdx]}%`,
+                                width: `${pcts[sortIdx]}%`,
+                                background: `linear-gradient(180deg, hsl(${hue}, 60%, 42%), hsl(${hue}, 55%, 32%))`,
+                                transition: "left 350ms ease, width 350ms ease",
+                                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.2)",
+                                textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+                                whiteSpace: "nowrap",
+                            }}
+                        >
+                            {isHost && <span style={{ fontSize: 11 }}>👑</span>}
+                            <span>{letter}</span>
+                            {isYou && <span style={{ fontSize: 11 }}>👤</span>}
+                            <span className={css.opacity(0.85) + ""}>{entry.score}</span>
                         </div>
                     );
                 })}
@@ -1264,28 +2050,7 @@ export class LetterFastGame extends preact.Component {
             await startGame();
         };
         const startMultiplayer = async () => {
-            if (!gameState.isMultiplayer) {
-                await this.convertToMultiplayer();
-                await new Promise(r => setTimeout(r, 250));
-            }
-            if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
-                try {
-                    const rpc = getRPCClient();
-                    await (rpc as any).updateGameSettings(
-                        gameState.gameId,
-                        this.synced.cfgWidth,
-                        this.synced.cfgHeight,
-                        this.synced.cfgDuration,
-                        this.synced.cfgShowRemaining,
-                        this.synced.cfgShowTotal,
-                        this.synced.cfgGameMode,
-                        this.synced.cfgCoopGoalPct / 100,
-                    );
-                    await rpc.startGame(gameState.gameId);
-                } catch (error) {
-                    console.error("Failed to start multiplayer game:", error);
-                }
-            }
+            await this.startOrJoinMultiplayer();
         };
         const inMpAsNonHost = gameState.isMultiplayer && gameState.myPlayerIndex !== 0;
         const mpDisabled = this.synced.isConverting || inMpAsNonHost;
@@ -1302,6 +2067,22 @@ export class LetterFastGame extends preact.Component {
                 >
                     {this.synced.isConverting && "👥 Starting…" || "👥 Start Multiplayer"}
                 </button>
+                <button
+                    onClick={this.toggleVoiceMode}
+                    title={this.synced.voiceError || (this.synced.voiceModeOn ? "Voice mode is on — speak words to play" : "Speak words to play them automatically")}
+                    className={btn}
+                >
+                    {this.synced.voiceLoading
+                        ? "⏳ Voice Mode: Loading…"
+                        : this.synced.voiceModeOn
+                            ? `🎤 Voice Mode: On${this.synced.voiceStatus ? ` (${this.synced.voiceStatus})` : ""}`
+                            : "🎙️ Voice Mode: Off"}
+                </button>
+                {this.synced.voiceError && (
+                    <div className={css.fontSize(11).colorhsl(0, 70, 60).pad2(2, 10) + ""}>
+                        {this.synced.voiceError}
+                    </div>
+                )}
                 {gameState.status === "playing" && !gameState.isMultiplayer && (
                     <button onClick={closeAfter(() => endGame())} className={btn}>
                         ⏹️ End Now
@@ -1343,6 +2124,7 @@ export class LetterFastGame extends preact.Component {
                                 let isSelected = this.isCellSelected(ri, ci);
                                 let isPulsing = this.isCellPulsing(ri, ci);
                                 let isPeerFlashing = this.synced.peerFlashCells.some(c => c.row === ri && c.col === ci);
+                                let isBlockedFlashing = this.synced.blockedFlashCells.some(c => c.row === ri && c.col === ci);
                                 let isExhausted = !this.isCellExhausted(ri, ci);
                                 return (
                                     <div
@@ -1372,6 +2154,18 @@ export class LetterFastGame extends preact.Component {
                                                 style={{
                                                     border: "2px solid rgba(255, 255, 255, 0.6)",
                                                     backgroundColor: "transparent"
+                                                }}
+                                            />
+                                        )}
+                                        {isBlockedFlashing && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                    + " blocked-flash-cell"}
+                                                style={{
+                                                    border: "3px solid rgba(255, 60, 60, 0.95)",
+                                                    boxShadow: "0 0 12px rgba(255, 60, 60, 0.7)",
+                                                    background: "transparent",
                                                 }}
                                             />
                                         )}
@@ -1715,7 +2509,8 @@ export class LetterFastGame extends preact.Component {
                                     className={css.fontSize(13).pad2(4, 6).fillWidth + ""}
                                 >
                                     <option value="competitive">Competitive (race)</option>
-                                    <option value="cooperative">Cooperative (shared)</option>
+                                    <option value="cooperative">Cooperative (shared, reach goal)</option>
+                                    <option value="competitive-shared">Competitive shared (race, no double-picks)</option>
                                 </select>
                             </div>
                         );
@@ -1758,6 +2553,10 @@ export class LetterFastGame extends preact.Component {
                                     this.synced.cfgDurationStr = String(clamped);
                                     if (clamped * 1000 !== this.synced.cfgDuration) {
                                         this.synced.cfgDuration = clamped * 1000;
+                                        gameState.gameDuration = clamped * 1000;
+                                        if (gameState.status !== "playing") {
+                                            gameState.timeRemaining = clamped * 1000;
+                                        }
                                         this.saveMenuConfig();
                                     }
                                 }}
@@ -1807,6 +2606,20 @@ export class LetterFastGame extends preact.Component {
                                     />
                                     <span>Total possible score</span>
                                 </label>
+                                <label
+                                    className={css.hbox(6).alignItems("center").fontSize(12).cursor("pointer") + ""}
+                                    title="Drawing a word picks the highest-scoring path automatically"
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={this.synced.cfgAutoBestPath}
+                                        onChange={(e) => {
+                                            this.synced.cfgAutoBestPath = e.currentTarget.checked;
+                                            this.saveMenuConfig();
+                                        }}
+                                    />
+                                    <span>Auto-pick highest-scoring path</span>
+                                </label>
                             </div>
                         );
                     })()}
@@ -1816,7 +2629,97 @@ export class LetterFastGame extends preact.Component {
                             {this.synced.menuError}
                         </div>
                     )}
+
+                    <div className={css.vbox(4)}>
+                        <div className={css.hbox(6).alignItems("center").justifyContent("space-between")}>
+                            <div className={sectionTitle}>Board (letters or URL)</div>
+                            <button
+                                onClick={this.copyBoardText}
+                                title="Copy a share link to this board"
+                                className={css.fontSize(12).pad2(2, 8) + ""}
+                            >
+                                {this.synced.boardImportCopied ? "✓ Link copied" : "🔗 Copy link"}
+                            </button>
+                        </div>
+                        <textarea
+                            ref={(el) => { this.boardTextareaRef = el || undefined; }}
+                            defaultValue={this.gridToText(gameState.grid)}
+                            spellcheck={false}
+                            rows={Math.max(4, gameState.gridHeight)}
+                            placeholder={"ABCD\nEFGH\nIJKL\nMNOP\n\n…or paste a share URL"}
+                            className={css.fontSize(14).pad2(6, 8).fillWidth
+                                .fontFamily("monospace").textTransform("uppercase")
+                                .hsl(240, 30, 8).colorhsl(0, 0, 100) + ""}
+                            style={{
+                                resize: "vertical",
+                                letterSpacing: "2px",
+                                lineHeight: "1.3",
+                                border: "1px solid rgba(255,255,255,0.15)",
+                                borderRadius: "6px",
+                            }}
+                        />
+                        {this.synced.boardImportError && (
+                            <div className={css.colorhsl(0, 70, 60).fontSize(11).pad2(2, 4) + ""}>
+                                {this.synced.boardImportError}
+                            </div>
+                        )}
+                        <button
+                            onClick={() => { void this.importBoardFromText(); }}
+                            disabled={gameState.isMultiplayer}
+                            title={gameState.isMultiplayer ? "Cannot import board in multiplayer" : "Replace the current board"}
+                            className={css.fontSize(13).pad2(6, 10) + ""}
+                        >
+                            Import board
+                        </button>
+                    </div>
                 </div>
+            </div>
+        );
+    }
+
+    renderVoiceTranscript() {
+        if (!this.synced.voiceModeOn && !this.synced.voiceLoading) return undefined;
+        const tokens = this.synced.voiceTokens;
+        const listening = this.synced.voiceTranscriptListening;
+        if (!listening && tokens.length === 0) return undefined;
+        const tokenColor = (status: VoiceTokenStatus) => {
+            // Matched: solid green. Already-played: green at reduced
+            // opacity. Pending and any "invalid" status just render at
+            // full normal color (or low opacity for invalid). No
+            // separate gray "tentative" tier — every word counts.
+            if (status === "ok") return css.colorhsl(120, 60, 65) + "";
+            if (status === "already") return css.colorhsl(120, 60, 65).opacity(0.45) + "";
+            if (status === "pending") return css.colorhsl(0, 0, 95) + "";
+            return css.colorhsl(0, 0, 95).opacity(0.35) + "";
+        };
+        const tokenTitle = (t: VoiceToken) => {
+            if (t.status === "ok") return `+${t.points ?? 0}`;
+            if (t.status === "not-word") return "Not a word";
+            if (t.status === "not-on-board") return "Not on the board";
+            if (t.status === "already") return "Already played";
+            if (t.status === "pending") return "Checking…";
+            return "Skipped";
+        };
+        return (
+            <div className={css.fontSize(20).fontWeight("bold").pad2(10, 12).borderRadius(8)
+                .hsl(240, 30, 18).colorhsl(0, 0, 100)
+                + ""}
+                style={{ border: "1px solid rgba(255,255,255,0.1)", lineHeight: "1.3" }}
+            >
+                {tokens.length === 0 ? (
+                    <span className={css.colorhsl(60, 70, 70).fontStyle("italic") + ""}>Listening…</span>
+                ) : (
+                    <span>
+                        {tokens.map((t, i) => (
+                            <span key={i} title={tokenTitle(t)} className={tokenColor(t.status)}>
+                                {i > 0 ? " " : ""}{t.word}
+                                {t.status === "ok" && t.points !== undefined && (
+                                    <span className={css.fontSize(13).opacity(0.7) + ""}> +{t.points}</span>
+                                )}
+                            </span>
+                        ))}
+                    </span>
+                )}
             </div>
         );
     }
@@ -1828,14 +2731,20 @@ export class LetterFastGame extends preact.Component {
                 .hsl(240, 30, 15).borderRadius(8).pad2(12)
                 .colorhsl(0, 0, 100)
             }>
+                {this.renderVoiceTranscript()}
                 {gameState.matchedWords.slice().reverse().map((w, i) => {
                     const letter = typeof w.playerIndex === "number"
                         ? String.fromCharCode(65 + w.playerIndex)
                         : undefined;
                     const isYou = typeof w.playerIndex === "number"
                         && w.playerIndex === gameState.myPlayerIndex;
+                    const blocked = w.blocked === true;
                     return (
-                        <div key={i} className={css.hbox(8).fontSize(18).alignItems("center")}>
+                        <div
+                            key={i}
+                            className={css.hbox(8).fontSize(18).alignItems("center") + (blocked ? css.opacity(0.55) : "")}
+                            title={blocked ? "Already taken by another player" : undefined}
+                        >
                             {showPrefix && letter && (
                                 <span className={css.fontSize(13).fontWeight("bold")
                                     .pad2(1, 5).borderRadius(4)
@@ -1844,10 +2753,15 @@ export class LetterFastGame extends preact.Component {
                                     {letter}
                                 </span>
                             )}
-                            <span>{w.word}</span>
-                            <span className={css.fontSize(14).opacity(0.7)}>
-                                {w.points}
+                            <span style={blocked ? { textDecoration: "line-through", color: "rgba(255,140,140,0.85)" } : undefined}>
+                                {w.word}
                             </span>
+                            {!blocked && (
+                                <span className={css.fontSize(14).opacity(0.7)}>{w.points}</span>
+                            )}
+                            {blocked && (
+                                <span className={css.fontSize(11).opacity(0.7) + ""}>taken</span>
+                            )}
                         </div>
                     );
                 })}
@@ -1915,6 +2829,15 @@ export class LetterFastGame extends preact.Component {
                         animation: peerFlash ${PEER_FLASH_DURATION_MS}ms ease-out;
                         pointer-events: none;
                     }
+                    @keyframes blockedFlash {
+                        0% { opacity: 1; }
+                        70% { opacity: 1; }
+                        100% { opacity: 0; }
+                    }
+                    .blocked-flash-cell {
+                        animation: blockedFlash 800ms ease-out forwards;
+                        pointer-events: none;
+                    }
                 `}</style>
                 <div className={css.fillBoth.vbox(SECTION_GAP).alignItems("center")}>
                     <div
@@ -1922,16 +2845,25 @@ export class LetterFastGame extends preact.Component {
                     >
                         {this.renderTimeAndScore(timeBarHue, timePercent)}
                         {gameState.isMultiplayer && (
-                            <div className={css.hbox(12).wrap.alignItems("center")}>
+                            <div className={css.hbox(12).alignItems("center").fillWidth}>
                                 {this.renderConnectionStatus()}
-                                {this.renderPlayerScores()}
+                                <div style={{ flex: "1 1 0", minWidth: 0 }}>
+                                    {this.renderPlayerScores()}
+                                </div>
                             </div>
                         )}
                     </div>
                     <div
                         ref={this.setMidRef}
                         className={css.fillWidth.vbox(0).justifyContent("center").alignItems("center")}
-                        style={{ flex: "1 1 0", minHeight: 0 }}
+                        style={{
+                            flex: "1 1 0",
+                            minHeight: 0,
+                            touchAction: "none",
+                            width: `calc(100% + ${MARGIN_EMPTY_SIDE * 2}px + env(safe-area-inset-left) + env(safe-area-inset-right))`,
+                            marginLeft: `calc(-${MARGIN_EMPTY_SIDE}px - env(safe-area-inset-left))`,
+                            marginRight: `calc(-${MARGIN_EMPTY_SIDE}px - env(safe-area-inset-right))`,
+                        }}
                     >
                         {this.renderGrid()}
                     </div>

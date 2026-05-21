@@ -14,8 +14,11 @@ export interface SavedConfig {
     gameDuration: number;
     showRemainingWordsPerCell?: boolean;
     showTotalPossibleScore?: boolean;
-    gameMode?: "competitive" | "cooperative";
+    gameMode?: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction?: number;
+    /** When true, drawing a word picks the highest-scoring path for that
+     *  word automatically, ignoring which exact cells the user traced. */
+    autoBestPath?: boolean;
 }
 
 export function loadSavedConfig(): SavedConfig | undefined {
@@ -32,9 +35,14 @@ export function loadSavedConfig(): SavedConfig | undefined {
                 gameDuration: config.gameDuration,
                 showRemainingWordsPerCell: !!config.showRemainingWordsPerCell,
                 showTotalPossibleScore: !!config.showTotalPossibleScore,
-                gameMode: config.gameMode === "cooperative" ? "cooperative" : "competitive",
+                gameMode: config.gameMode === "cooperative"
+                    ? "cooperative"
+                    : config.gameMode === "competitive-shared"
+                        ? "competitive-shared"
+                        : "competitive",
                 coopGoalFraction: typeof config.coopGoalFraction === "number" && config.coopGoalFraction > 0 && config.coopGoalFraction <= 1
                     ? config.coopGoalFraction : 0.5,
+                autoBestPath: config.autoBestPath !== false,
             };
         }
     } catch (error) {
@@ -62,6 +70,7 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         showTotalPossibleScore: false,
         gameMode: "competitive",
         coopGoalFraction: 0.5,
+        autoBestPath: true,
     };
 }
 

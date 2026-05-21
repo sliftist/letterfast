@@ -20,9 +20,15 @@
             background: transparent!important;
             color: hsl(0, 0%, 100%)!important;
         }
+        html, body {
+            overscroll-behavior: none;
+        }
         body {
             margin: 0px;
             padding: 0px;
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
         }
         a:not(.Anchor), a:visited:not(.Anchor) {
             color: hsl(210, 75%, 65%);

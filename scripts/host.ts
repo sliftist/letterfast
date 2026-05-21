@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const ROOT = path.resolve(__dirname, "..", "build-web");
-const PORT = Number(process.env.PORT) || 8080;
+const PORT = Number(process.env.PORT) || 9123;
 
 const MIME: Record<string, string> = {
     ".html": "text/html; charset=utf-8",

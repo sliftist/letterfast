@@ -78,6 +78,49 @@ export async function getWordTrie(): Promise<Trie> {
     return wordTrie;
 }
 
+export function findPathsForWord(grid: GridCell[][], target: string): { row: number; col: number }[][] {
+    const upper = target.toUpperCase();
+    if (upper.length === 0) return [];
+    const height = grid.length;
+    const width = grid[0]?.length ?? 0;
+    if (height === 0 || width === 0) return [];
+
+    const paths: { row: number; col: number }[][] = [];
+    const path: { row: number; col: number }[] = [];
+    const visited = new Set<string>();
+
+    function dfs(r: number, c: number, idx: number) {
+        if (grid[r][c].letter !== upper[idx]) return;
+        path.push({ row: r, col: c });
+        if (idx === upper.length - 1) {
+            paths.push(path.slice());
+        } else {
+            const key = `${r},${c}`;
+            visited.add(key);
+            for (let dr = -1; dr <= 1; dr++) {
+                for (let dc = -1; dc <= 1; dc++) {
+                    if (dr === 0 && dc === 0) continue;
+                    const nr = r + dr;
+                    const nc = c + dc;
+                    if (nr < 0 || nr >= height || nc < 0 || nc >= width) continue;
+                    const nk = `${nr},${nc}`;
+                    if (visited.has(nk)) continue;
+                    dfs(nr, nc, idx + 1);
+                }
+            }
+            visited.delete(key);
+        }
+        path.pop();
+    }
+
+    for (let r = 0; r < height; r++) {
+        for (let c = 0; c < width; c++) {
+            dfs(r, c, 0);
+        }
+    }
+    return paths;
+}
+
 export function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
     let foundWords = new Set<string>();
     let wordPaths = new Map<string, Set<string>>();
@@ -370,7 +413,7 @@ export function findWordPathInGrid(grid: GridCell[][], word: string): { row: num
     return undefined;
 }
 
-function calculateTotalScoreForWords(grid: GridCell[][], words: Set<string>, trie: Trie): number {
+export function calculateTotalScoreForWords(grid: GridCell[][], words: Set<string>, trie: Trie): number {
     let totalScore = 0;
 
     for (let word of words) {

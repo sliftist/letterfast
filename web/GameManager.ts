@@ -24,7 +24,7 @@ interface Game {
     totalPossibleScore: number;
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
-    gameMode: "competitive" | "cooperative";
+    gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     timerSeqNum: number;
 }
@@ -38,7 +38,7 @@ export interface GameSnapshot {
     gridWidth: number;
     gridHeight: number;
     gameDuration: number;
-    gameMode: "competitive" | "cooperative";
+    gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
@@ -138,9 +138,19 @@ export function joinGame(gameId: string, player: PlayerIdentifier): void {
         throw new Error(`Game ${gameId} is full`);
     }
 
+    if (game.players.length === 0) {
+        game.status = "waiting";
+        game.startTime = undefined;
+        game.endTime = undefined;
+        game.scores.clear();
+        game.words.clear();
+        game.timerSeqNum++;
+    }
+
     game.players.push(player);
     game.scores.set(player, 0);
     game.words.set(player, []);
+    game.lastActivityTime = Date.now();
 }
 
 export function getGame(gameId: string): Game | undefined {
@@ -277,9 +287,16 @@ export async function submitWord(config: {
     if (playerWords.some(w => w.word.toLowerCase() === wordLower)) {
         throw new Error(`Word ${config.word} already played`);
     }
-    if (game.gameMode === "cooperative") {
-        for (const [, otherWords] of game.words) {
+    // Both cooperative and competitive-shared dedupe globally across
+    // players. Competitive-shared throws a structured "BLOCKED:" error so
+    // the client can show "this word was already taken by someone else."
+    if (game.gameMode === "cooperative" || game.gameMode === "competitive-shared") {
+        for (const [otherPlayer, otherWords] of game.words) {
+            if (otherPlayer === config.player) continue;
             if (otherWords.some(w => w.word.toLowerCase() === wordLower)) {
+                if (game.gameMode === "competitive-shared") {
+                    throw new Error(`BLOCKED: ${config.word}`);
+                }
                 throw new Error(`Word ${config.word} already played`);
             }
         }
@@ -377,7 +394,7 @@ export function updateGameSettings(config: {
     gameDuration?: number;
     showRemainingWordsPerCell?: boolean;
     showTotalPossibleScore?: boolean;
-    gameMode?: "competitive" | "cooperative";
+    gameMode?: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction?: number;
 }): void {
     const game = games.get(config.gameId);
@@ -418,7 +435,11 @@ export function updateGameSettings(config: {
     }
 
     if (config.gameMode !== undefined) {
-        game.gameMode = config.gameMode === "cooperative" ? "cooperative" : "competitive";
+        if (config.gameMode === "cooperative" || config.gameMode === "competitive-shared") {
+            game.gameMode = config.gameMode;
+        } else {
+            game.gameMode = "competitive";
+        }
     }
     if (config.coopGoalFraction !== undefined) {
         game.coopGoalFraction = Math.max(0.05, Math.min(1, config.coopGoalFraction));
@@ -427,7 +448,7 @@ export function updateGameSettings(config: {
     game.timerSeqNum++;
 }
 
-export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative"; coopGoalFraction: number } {
+export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number } {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);

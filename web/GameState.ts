@@ -25,17 +25,21 @@ export interface MultiplayerPlayer {
     score: number;
 }
 
-export type GameMode = "competitive" | "cooperative";
+export type GameMode = "competitive" | "cooperative" | "competitive-shared";
 
 export interface MatchedWord {
     word: string;
     points: number;
     playerIndex?: number;
+    /** Set in competitive-shared mode when this player tried to pick a
+     *  word another player had already picked. Renders with strikethrough. */
+    blocked?: boolean;
 }
 
 export interface GameState {
     status: "ready" | "playing" | "finished" | "waiting";
     grid: GridCell[][];
+    startTime: number | undefined;
     timeRemaining: number;
     elapsedTime: number;
     score: number;
@@ -145,6 +149,7 @@ const initialConfig = isNode() ? { gridWidth: 4, gridHeight: 4, gameDuration: GA
 export const gameState = observable<GameState>({
     status: "ready",
     grid: [],
+    startTime: undefined,
     timeRemaining: initialConfig.gameDuration,
     elapsedTime: 0,
     score: 0,
@@ -203,10 +208,31 @@ void generateGrid().then(grid => {
     }
 });
 
-let timerInterval: number | undefined;
+function tickTimer() {
+    if (gameState.status !== "playing") return;
+    if (gameState.startTime === undefined) return;
+    const elapsed = Date.now() - gameState.startTime;
+    gameState.elapsedTime = elapsed;
+    if (gameState.gameMode === "cooperative") {
+        if (!gameState.isMultiplayer) {
+            const goal = Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction));
+            if (gameState.score >= goal && gameState.totalPossibleScore > 0) {
+                void endGame();
+            }
+        }
+        return;
+    }
+    gameState.timeRemaining = Math.max(0, gameState.gameDuration - elapsed);
+    if (gameState.timeRemaining === 0 && !gameState.isMultiplayer) {
+        void endGame();
+    }
+}
+
+if (!isNode()) {
+    window.setInterval(tickTimer, 100);
+}
 
 export async function startGame(regenerateGrid = true, duration?: number) {
-    gameState.status = "playing";
     if (duration !== undefined) {
         gameState.gameDuration = duration;
     }
@@ -224,30 +250,13 @@ export async function startGame(regenerateGrid = true, duration?: number) {
     gameState.matchedWordsSet.clear();
     gameState.consecutiveWrongWords = 0;
     gameState.timeoutUntil = 0;
-    if (timerInterval) clearInterval(timerInterval);
-    let startTime = Date.now();
-    timerInterval = window.setInterval(() => {
-        if (gameState.status !== "playing") return;
-        const elapsed = Date.now() - startTime;
-        gameState.elapsedTime = elapsed;
-        if (gameState.gameMode === "cooperative") {
-            const goal = Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction));
-            if (gameState.score >= goal && gameState.totalPossibleScore > 0) {
-                void endGame();
-            }
-            return;
-        }
-        gameState.timeRemaining = Math.max(0, gameState.gameDuration - elapsed);
-        if (gameState.timeRemaining === 0) {
-            void endGame();
-        }
-    }, 100);
+    gameState.startTime = Date.now();
+    gameState.status = "playing";
 }
 
 export async function endGame() {
-    if (timerInterval) clearInterval(timerInterval);
-    timerInterval = undefined;
     gameState.status = "finished";
+    gameState.startTime = undefined;
     gameHistory.push({
         timestamp: Date.now(),
         score: gameState.score,
@@ -326,8 +335,6 @@ export async function changeGridSize(config: { width: number; height: number }) 
     gameState.matchedWords = [];
     gameState.matchedWordsSet.clear();
     gameState.timeRemaining = gameState.gameDuration;
-    if (timerInterval) clearInterval(timerInterval);
-    timerInterval = undefined;
 }
 
 export async function regenerateGridForCurrentSize(): Promise<void> {
@@ -396,6 +403,4 @@ export function formatTime(ms: number): string {
 }
 
 export function cleanup() {
-    if (timerInterval) clearInterval(timerInterval);
-    timerInterval = undefined;
 }

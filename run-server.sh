@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 echo "Starting letterfast server..."
 echo "Script directory: $SCRIPT_DIR"
-echo "Port: 7276"
+echo "Port: 8880"
 echo "Server will auto-restart on crash"
 echo "To stop the server, kill this process or exit the screen session"
 echo ""

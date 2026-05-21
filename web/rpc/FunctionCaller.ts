@@ -74,6 +74,15 @@ export function createFunctionCaller(config: {
 
     if (config.onDisconnect) {
         config.onDisconnect(() => {
+            // Reject any in-flight calls so callers don't hang forever
+            // when the underlying transport drops.
+            if (pendingCalls.size > 0) {
+                const error = new Error("RPC connection closed");
+                for (const [id, pending] of Array.from(pendingCalls)) {
+                    pendingCalls.delete(id);
+                    pending.reject(error);
+                }
+            }
             disconnectCallbacks.forEach(callback => callback());
         });
     }
