@@ -11,6 +11,11 @@ export const CELL_GAP = 8;
 export const HIT_SIZE = 55;
 export const HIT_OFFSET = (CELL_SIZE - HIT_SIZE) / 2;
 export const GAME_DURATION = 90000;
+// New users default to cooperative mode at this goal fraction. The goal
+// no longer auto-ends the game — it's just a milestone — so a low target
+// gives a quick sense of progress while leaving room to keep playing.
+export const DEFAULT_GAME_MODE: "cooperative" = "cooperative";
+export const DEFAULT_COOP_GOAL_FRACTION = 0.25;
 export const MIN_VOWEL_FRACTION = 0.20;
 export const MAX_VOWEL_FRACTION = 0.45;
 
@@ -74,6 +79,11 @@ export interface GameState {
     restartCountdownEnd: number;
     gameMode: GameMode;
     coopGoalFraction: number;
+    /** Set when the user resumes a cooperative game after hitting the goal.
+     *  While true, the goal no longer triggers `endGame()` so they can keep
+     *  playing past the target (the goal indicator stays visible as a
+     *  milestone). Cleared at the start of any new game. */
+    coopInfinite: boolean;
     peerFlashRequest?: { id: number; cells: { row: number; col: number }[]; playerIndex: number };
     lastGameOverState?: GameOverState;
     lastGameOverOnPlayAgain?: () => void;
@@ -175,8 +185,9 @@ export const gameState = observable<GameState>({
     showRemainingWordsPerCell: !!initialConfig.showRemainingWordsPerCell,
     showTotalPossibleScore: !!initialConfig.showTotalPossibleScore,
     restartCountdownEnd: 0,
-    gameMode: (initialConfig as any).gameMode || "competitive",
-    coopGoalFraction: (initialConfig as any).coopGoalFraction ?? 0.5,
+    gameMode: (initialConfig as any).gameMode || DEFAULT_GAME_MODE,
+    coopGoalFraction: (initialConfig as any).coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION,
+    coopInfinite: false,
     peerFlashRequest: undefined,
     lastGameOverState: undefined,
     lastGameOverOnPlayAgain: undefined,
@@ -214,7 +225,7 @@ function tickTimer() {
     const elapsed = Date.now() - gameState.startTime;
     gameState.elapsedTime = elapsed;
     if (gameState.gameMode === "cooperative") {
-        if (!gameState.isMultiplayer) {
+        if (!gameState.isMultiplayer && !gameState.coopInfinite) {
             const goal = Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction));
             if (gameState.score >= goal && gameState.totalPossibleScore > 0) {
                 void endGame();
@@ -251,7 +262,22 @@ export async function startGame(regenerateGrid = true, duration?: number) {
     gameState.consecutiveWrongWords = 0;
     gameState.timeoutUntil = 0;
     gameState.startTime = Date.now();
+    gameState.coopInfinite = false;
     gameState.status = "playing";
+}
+
+// Resume a finished cooperative game so the player can keep accumulating
+// score past the goal. Preserves the grid, found words, and score; only
+// flips status back to "playing" and disables the goal-end check.
+export function resumeCoopGame(): void {
+    if (gameState.gameMode !== "cooperative") return;
+    if (gameState.isMultiplayer) return;
+    gameState.coopInfinite = true;
+    gameState.status = "playing";
+    // Preserve elapsedTime by anchoring startTime relative to now.
+    gameState.startTime = Date.now() - gameState.elapsedTime;
+    gameState.lastGameOverState = undefined;
+    gameState.lastGameOverOnPlayAgain = undefined;
 }
 
 export async function endGame() {

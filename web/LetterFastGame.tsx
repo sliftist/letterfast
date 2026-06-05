@@ -24,8 +24,10 @@ import {
     GridCell,
     changeGridSize,
     applySettings,
+    DEFAULT_GAME_MODE,
+    DEFAULT_COOP_GOAL_FRACTION,
 } from "./GameState";
-import { findPathsForWord } from "./GridGenerator";
+import { findPathsForWord, findAllWordsInGrid, getWordTrie } from "./GridGenerator";
 import { VoiceController, StreamingWord } from "./VoiceMode";
 import { preloadHomophoneDict, getHomophones, findPhoneticMatches } from "./Homophones";
 import { getRPCClient, resetRPCClient } from "./rpcClient";
@@ -47,6 +49,15 @@ const TIMEOUT_FADEOUT_DURATION = 300;
 const VOICE_RESET_GAP_MS = 1000;
 const PEER_FLASH_STAGGER_MS = 100;
 const PEER_FLASH_DURATION_MS = 500;
+const ACCEPTED_CELL_FLASH_MS = 700;
+const WORD_REVEAL_DURATION_MS = 700;
+const SCORE_PULSE_DURATION_MS = 600;
+const DEMO_WORD_LENGTH = 3;
+const DEMO_STEP_MS = 380;
+const DEMO_HOLD_MS = 900;
+const DEMO_GAP_MS = 600;
+const DEMO_IDLE_RECHECK_MS = 1000;
+const DEMO_FINISHED_TOP_N = 20;
 
 function randomGameCode(): string {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -120,10 +131,30 @@ function redrawCanvas(
     currentPos: { x: number; y: number } | undefined,
     debugPositions: { x: number; y: number }[],
     gridSize: { width: number; height: number },
+    demoCells: { row: number; col: number }[],
 ) {
     let ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (demoCells.length >= 2) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(0, 212, 255, 0.35)";
+        ctx.lineWidth = 5;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "rgba(0, 212, 255, 0.25)";
+        ctx.beginPath();
+        const dFirst = cellCenter(demoCells[0].row, demoCells[0].col);
+        ctx.moveTo(dFirst.x, dFirst.y);
+        for (let i = 1; i < demoCells.length; i++) {
+            const c = cellCenter(demoCells[i].row, demoCells[i].col);
+            ctx.lineTo(c.x, c.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
 
     if (DEBUG_MODE) {
         for (let row = 0; row < gridSize.height; row++) {
@@ -163,6 +194,75 @@ function redrawCanvas(
     ctx.stroke();
 }
 
+// Collects every unique `length`-letter dictionary word path on the grid.
+// Used by the idle-board demo to pick something short to trace as a hint.
+function findShortWordPaths(grid: GridCell[][], length: number, wordSet: Set<string>): { row: number; col: number }[][] {
+    const out: { row: number; col: number }[][] = [];
+    const seenWords = new Set<string>();
+    const h = grid.length;
+    const w = grid[0]?.length ?? 0;
+    const path: { row: number; col: number }[] = [];
+    const visited = new Set<string>();
+    let letters = "";
+    function dfs() {
+        if (path.length === length) {
+            const lower = letters.toLowerCase();
+            if (!seenWords.has(lower) && wordSet.has(lower)) {
+                seenWords.add(lower);
+                out.push(path.slice());
+            }
+            return;
+        }
+        const last = path[path.length - 1];
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+                const nr = last.row + dr;
+                const nc = last.col + dc;
+                if (nr < 0 || nr >= h || nc < 0 || nc >= w) continue;
+                const k = `${nr},${nc}`;
+                if (visited.has(k)) continue;
+                visited.add(k);
+                path.push({ row: nr, col: nc });
+                letters += grid[nr][nc].letter;
+                dfs();
+                letters = letters.slice(0, -1);
+                path.pop();
+                visited.delete(k);
+            }
+        }
+    }
+    for (let r = 0; r < h; r++) {
+        for (let c = 0; c < w; c++) {
+            const k = `${r},${c}`;
+            visited.add(k);
+            path.push({ row: r, col: c });
+            letters = grid[r][c].letter;
+            dfs();
+            letters = "";
+            path.pop();
+            visited.delete(k);
+        }
+    }
+    return out;
+}
+
+// Returns the highest-scoring path on the grid that spells the given letter
+// sequence, or undefined if no valid path exists. Used by both keyboard typing
+// and (potentially) drag rerouting so we don't fork the pathing logic.
+function findBestPathForLetters(grid: GridCell[][], letters: string): { row: number; col: number }[] | undefined {
+    if (letters.length === 0) return undefined;
+    const paths = findPathsForWord(grid, letters);
+    if (paths.length === 0) return undefined;
+    let best = paths[0];
+    let bestScore = calculateWordScoreForGrid(grid, best);
+    for (let i = 1; i < paths.length; i++) {
+        const s = calculateWordScoreForGrid(grid, paths[i]);
+        if (s > bestScore) { bestScore = s; best = paths[i]; }
+    }
+    return best;
+}
+
 type VoiceTokenStatus = "pending" | "ok" | "not-word" | "not-on-board" | "already" | "skipped";
 interface VoiceToken {
     word: string;
@@ -193,6 +293,11 @@ export class LetterFastGame extends preact.Component {
         currentPos: undefined as { x: number; y: number } | undefined,
         selectedCells: [] as { row: number; col: number }[],
         pulseCells: [] as { row: number; col: number }[],
+        demoCells: [] as { row: number; col: number }[],
+        acceptedCells: [] as { row: number; col: number }[],
+        recentAcceptedWord: undefined as string | undefined,
+        recentAcceptedToken: 0,
+        scorePulseId: 0,
         floatingScores: [] as FloatingScore[],
         scale: 1,
         totalWidth: 0,
@@ -203,6 +308,9 @@ export class LetterFastGame extends preact.Component {
         isOverCancelZone: false,
         showTimeoutMessage: false,
         timeoutMessage: "",
+        timeoutWord: "",
+        timeoutStartedAt: 0,
+        timeoutTotalMs: 0,
         timeoutFadingOut: false,
         wrongWordCells: [] as { row: number; col: number }[],
         linkCopied: false,
@@ -216,8 +324,9 @@ export class LetterFastGame extends preact.Component {
         cfgShowRemaining: false,
         cfgShowTotal: false,
         cfgAutoBestPath: true,
-        cfgGameMode: "competitive" as "competitive" | "cooperative" | "competitive-shared",
-        cfgCoopGoalPct: 50,
+        cfgGameMode: DEFAULT_GAME_MODE as "competitive" | "cooperative" | "competitive-shared",
+        cfgCoopGoalPct: Math.round(DEFAULT_COOP_GOAL_FRACTION * 100),
+        cfgCoopGoalPctStr: String(Math.round(DEFAULT_COOP_GOAL_FRACTION * 100)),
         joinGameId: randomGameCode(),
         joining: false,
         menuError: undefined as string | undefined,
@@ -477,6 +586,9 @@ export class LetterFastGame extends preact.Component {
 
         this.synced.showTimeoutMessage = true;
         this.synced.timeoutMessage = "Not a word!";
+        this.synced.timeoutWord = "SAMPLE";
+        this.synced.timeoutStartedAt = Date.now();
+        this.synced.timeoutTotalMs = 5000;
         this.synced.wrongWordCells = [{ row: 1, col: 0 }, { row: 1, col: 1 }];
         gameState.timeoutUntil = Date.now() + 5000;
 
@@ -1069,7 +1181,67 @@ export class LetterFastGame extends preact.Component {
     onKeyDown = (e: KeyboardEvent) => {
         if (e.key === "Escape" && this.synced.drawing) {
             this.cancelSelection();
+            return;
         }
+        // Desktop keyboard typing: each letter re-paths selectedCells from
+        // scratch (matching the existing drag-trace display). Enter submits,
+        // Backspace removes a cell, Escape clears. If a typed letter has no
+        // valid path, the current selection is submitted immediately.
+        const tgt = e.target as HTMLElement | null;
+        const tagName = tgt?.tagName;
+        if (tagName === "INPUT" || tagName === "TEXTAREA" || tgt?.isContentEditable) return;
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (gameState.status !== "playing") return;
+        if (this.synced.menuOpen || this.synced.joinPopupOpen) return;
+        if (Date.now() < gameState.timeoutUntil) return;
+        if (this.synced.drawing) return;
+
+        if (e.key === "Backspace") {
+            if (this.synced.selectedCells.length > 0) {
+                this.synced.selectedCells = this.synced.selectedCells.slice(0, -1);
+                this.redraw();
+                e.preventDefault();
+            }
+            return;
+        }
+        if (e.key === "Escape") {
+            if (this.synced.selectedCells.length > 0) {
+                this.synced.selectedCells = [];
+                this.redraw();
+                e.preventDefault();
+            }
+            return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
+            if (this.synced.selectedCells.length >= 3) {
+                e.preventDefault();
+                void this.submitKeyboardWord();
+            }
+            return;
+        }
+        if (e.key.length === 1 && /^[a-zA-Z]$/.test(e.key)) {
+            e.preventDefault();
+            const current = this.synced.selectedCells
+                .map(c => gameState.grid[c.row]?.[c.col]?.letter ?? "")
+                .join("");
+            const target = (current + e.key).toUpperCase();
+            const best = findBestPathForLetters(gameState.grid, target);
+            if (best) {
+                this.synced.selectedCells = best;
+                this.redraw();
+            } else if (this.synced.selectedCells.length >= 3) {
+                void this.submitKeyboardWord();
+            } else {
+                this.synced.selectedCells = [];
+                this.redraw();
+            }
+        }
+    };
+
+    submitKeyboardWord = async () => {
+        await this.processSelectedWord();
+        this.synced.selectedCells = [];
+        this.redraw();
     };
 
     onGlobalMouseMove = (e: MouseEvent) => {
@@ -1102,8 +1274,10 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgDuration = saved.gameDuration;
             this.synced.cfgShowRemaining = !!saved.showRemainingWordsPerCell;
             this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
-            this.synced.cfgGameMode = saved.gameMode === "cooperative" ? "cooperative" : "competitive";
-            this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? 0.5) * 100);
+            this.synced.cfgGameMode = saved.gameMode === "cooperative" || saved.gameMode === "competitive-shared"
+                ? saved.gameMode
+                : "competitive";
+            this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION) * 100);
             this.synced.cfgAutoBestPath = saved.autoBestPath !== false;
         } else {
             this.synced.cfgWidth = gameState.gridWidth;
@@ -1111,6 +1285,7 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgDuration = gameState.gameDuration;
         }
         this.synced.cfgDurationStr = String(Math.round(this.synced.cfgDuration / 1000));
+        this.synced.cfgCoopGoalPctStr = String(this.synced.cfgCoopGoalPct);
         applySettings({
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
@@ -1357,6 +1532,7 @@ export class LetterFastGame extends preact.Component {
 
             window.addEventListener("keydown", this.onKeyDown);
             document.addEventListener("touchstart", this.preventGlobalTouch, { passive: false });
+            this.scheduleDemoTick(50);
         }
 
         const challengeData = challengeURL.value;
@@ -1429,6 +1605,7 @@ export class LetterFastGame extends preact.Component {
 
     componentWillUnmount() {
         cleanup();
+        this.cancelDemoTick();
         void this.stopVoiceMode();
         this.disposeVoiceRecognition();
         this.stopReconnectCountdown();
@@ -1472,8 +1649,165 @@ export class LetterFastGame extends preact.Component {
         let canvas = this.canvas;
         if (!canvas) return;
         let gridSize = getCurrentGridSize();
-        redrawCanvas(canvas, this.synced.selectedCells, this.synced.currentPos, this.synced.debugPositions, gridSize);
+        redrawCanvas(canvas, this.synced.selectedCells, this.synced.currentPos, this.synced.debugPositions, gridSize, this.synced.demoCells);
     }
+
+    demoTimeoutId: number | undefined;
+    demoCache: {
+        grid: GridCell[][];
+        // Snapshot of how many words were matched when finishedPaths was
+        // computed — invalidates the cache once the player finds more so
+        // the "words you missed" list stays correct.
+        matchedCount: number;
+        readyPath: { row: number; col: number }[] | undefined;
+        finishedPaths: { row: number; col: number }[][];
+    } | undefined;
+    demoFinishedIndex = 0;
+
+    isDemoEligible(): boolean {
+        if (isNode()) return false;
+        if (gameState.isMultiplayer) return false;
+        if (this.synced.drawing) return false;
+        if (this.synced.menuOpen) return false;
+        if (this.synced.joinPopupOpen) return false;
+        if (gameState.status !== "ready" && gameState.status !== "finished") return false;
+        if (this.synced.selectedCells.length > 0) return false;
+        if (Date.now() < gameState.timeoutUntil) return false;
+        return true;
+    }
+
+    cancelDemoTick = () => {
+        if (this.demoTimeoutId !== undefined) {
+            window.clearTimeout(this.demoTimeoutId);
+            this.demoTimeoutId = undefined;
+        }
+        if (this.synced.demoCells.length > 0) {
+            this.synced.demoCells = [];
+            this.redraw();
+        }
+    };
+
+    scheduleDemoTick = (delay: number) => {
+        if (this.demoTimeoutId !== undefined) {
+            window.clearTimeout(this.demoTimeoutId);
+        }
+        this.demoTimeoutId = window.setTimeout(() => {
+            this.demoTimeoutId = undefined;
+            void this.runDemoCycle();
+        }, delay);
+    };
+
+    ensureDemoCache = async (): Promise<typeof this.demoCache> => {
+        if (this.demoCache
+            && this.demoCache.grid === gameState.grid
+            && this.demoCache.matchedCount === gameState.matchedWords.length
+        ) {
+            return this.demoCache;
+        }
+        const grid = gameState.grid;
+        const wordSet = await getWordSet();
+        if (grid !== gameState.grid) return this.demoCache;
+
+        // Pick a single, deterministic 3-letter word to use as the
+        // "how to swipe" hint on the ready board — same word every time
+        // (highest-scoring, then alphabetical tiebreak).
+        const shortPaths = findShortWordPaths(grid, DEMO_WORD_LENGTH, wordSet);
+        let readyPath: { row: number; col: number }[] | undefined;
+        if (shortPaths.length > 0) {
+            const scored = shortPaths.map(p => ({
+                path: p,
+                score: calculateWordScoreForGrid(grid, p),
+                word: p.map(c => grid[c.row][c.col].letter).join(""),
+            }));
+            scored.sort((a, b) => b.score - a.score || a.word.localeCompare(b.word));
+            readyPath = scored[0].path;
+        }
+
+        // Top-scoring words on the board for the post-game demo: cycle
+        // through them so the player can see which words were available
+        // and how they were spelled.
+        const trie = await getWordTrie();
+        if (grid !== gameState.grid) return this.demoCache;
+        const allResult = findAllWordsInGrid(grid, trie);
+        const foundSet = new Set<string>();
+        for (const w of gameState.matchedWords) foundSet.add(w.word.toLowerCase());
+        const finishedScored: { path: { row: number; col: number }[]; score: number; word: string }[] = [];
+        for (const word of allResult.words) {
+            if (foundSet.has(word.toLowerCase())) continue;
+            const paths = findPathsForWord(grid, word.toUpperCase());
+            if (paths.length === 0) continue;
+            let best = paths[0];
+            let bestScore = calculateWordScoreForGrid(grid, best);
+            for (let i = 1; i < paths.length; i++) {
+                const s = calculateWordScoreForGrid(grid, paths[i]);
+                if (s > bestScore) { bestScore = s; best = paths[i]; }
+            }
+            finishedScored.push({ path: best, score: bestScore, word });
+        }
+        finishedScored.sort((a, b) => b.score - a.score || a.word.localeCompare(b.word));
+        const finishedPaths = finishedScored.slice(0, DEMO_FINISHED_TOP_N).map(s => s.path);
+
+        this.demoCache = {
+            grid,
+            matchedCount: gameState.matchedWords.length,
+            readyPath,
+            finishedPaths,
+        };
+        this.demoFinishedIndex = 0;
+        return this.demoCache;
+    };
+
+    runDemoCycle = async () => {
+        if (!this.isDemoEligible()) {
+            if (this.synced.demoCells.length > 0) {
+                this.synced.demoCells = [];
+                this.redraw();
+            }
+            this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+            return;
+        }
+        let cache: typeof this.demoCache;
+        try {
+            cache = await this.ensureDemoCache();
+        } catch {
+            this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+            return;
+        }
+        if (!cache || !this.isDemoEligible()) {
+            this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+            return;
+        }
+        let path: { row: number; col: number }[] | undefined;
+        if (gameState.status === "finished") {
+            if (cache.finishedPaths.length === 0) {
+                this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+                return;
+            }
+            path = cache.finishedPaths[this.demoFinishedIndex % cache.finishedPaths.length];
+            this.demoFinishedIndex++;
+        } else {
+            path = cache.readyPath;
+        }
+        if (!path) {
+            this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+            return;
+        }
+        for (let i = 1; i <= path.length; i++) {
+            if (!this.isDemoEligible()) {
+                this.synced.demoCells = [];
+                this.redraw();
+                this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+                return;
+            }
+            this.synced.demoCells = path.slice(0, i);
+            this.redraw();
+            await new Promise<void>(r => window.setTimeout(r, DEMO_STEP_MS));
+        }
+        await new Promise<void>(r => window.setTimeout(r, DEMO_HOLD_MS));
+        this.synced.demoCells = [];
+        this.redraw();
+        this.scheduleDemoTick(DEMO_GAP_MS);
+    };
 
     isCellSelected(row: number, col: number) {
         return this.synced.selectedCells.some(c => c.row === row && c.col === col);
@@ -1531,6 +1865,9 @@ export class LetterFastGame extends preact.Component {
         if (gameState.status !== "playing") return;
         if (Date.now() < gameState.timeoutUntil) return;
         this.synced.selectedCells = [];
+        if (this.synced.demoCells.length > 0) {
+            this.synced.demoCells = [];
+        }
         this.synced.drawing = true;
         this.synced.currentPos = pos;
         this.synced.showCancelZone = true;
@@ -1601,12 +1938,27 @@ export class LetterFastGame extends preact.Component {
         this.handleSelectionMove(pos);
     };
 
-    showWordAcceptedFeedback = (points: number) => {
+    showWordAcceptedFeedback = (points: number, word?: string) => {
         gameState.consecutiveWrongWords = 0;
         this.synced.pulseCells = this.synced.selectedCells.slice();
+        this.synced.acceptedCells = this.synced.selectedCells.slice();
         setTimeout(() => {
             this.synced.pulseCells = [];
         }, 600);
+        setTimeout(() => {
+            this.synced.acceptedCells = [];
+        }, ACCEPTED_CELL_FLASH_MS);
+        if (word) {
+            const upper = word.toUpperCase();
+            const token = ++this.synced.recentAcceptedToken;
+            this.synced.recentAcceptedWord = upper;
+            setTimeout(() => {
+                if (this.synced.recentAcceptedToken === token) {
+                    this.synced.recentAcceptedWord = undefined;
+                }
+            }, WORD_REVEAL_DURATION_MS);
+        }
+        this.synced.scorePulseId++;
         let scoreId = this.floatingScoreId++;
         this.synced.floatingScores.push({ id: scoreId, points, timestamp: Date.now() });
         setTimeout(() => {
@@ -1614,7 +1966,7 @@ export class LetterFastGame extends preact.Component {
         }, 1000);
     };
 
-    showWrongWordFeedback = () => {
+    showWrongWordFeedback = (word?: string) => {
         this.vibrateLong();
         gameState.consecutiveWrongWords++;
         const timeoutDuration = Math.min(WRONG_WORD_BASE_TIMEOUT + (gameState.consecutiveWrongWords - 1) * WRONG_WORD_TIMEOUT_INCREMENT, MAX_WRONG_WORD_TIMEOUT);
@@ -1622,6 +1974,11 @@ export class LetterFastGame extends preact.Component {
         this.synced.showTimeoutMessage = true;
         this.synced.timeoutFadingOut = false;
         this.synced.timeoutMessage = "Not a word!";
+        this.synced.timeoutWord = (word ?? this.synced.selectedCells
+            .map(c => gameState.grid[c.row]?.[c.col]?.letter ?? "")
+            .join("")).toUpperCase();
+        this.synced.timeoutStartedAt = Date.now();
+        this.synced.timeoutTotalMs = timeoutDuration;
         this.synced.wrongWordCells = this.synced.selectedCells.slice();
         setTimeout(() => {
             this.synced.timeoutFadingOut = true;
@@ -1643,25 +2000,31 @@ export class LetterFastGame extends preact.Component {
 
         const wordSet = await getWordSet();
         if (!wordSet.has(word)) {
-            this.showWrongWordFeedback();
+            this.showWrongWordFeedback(word);
             return;
         }
 
-        // Auto-best-path: re-pick the cells for this word so the user
-        // always gets the maximum score available for whatever they
-        // spelled, regardless of which exact cells they traced.
+        // Auto-best-path: when the user's word can be spelled multiple ways
+        // on the grid (ambiguous letters), only swap to a different path if
+        // it strictly out-scores what they traced. Ties keep the user's
+        // exact cells, so the accepted-flash + pulse on those cells matches
+        // what they actually touched. When we DO swap (strict higher score),
+        // selectedCells becomes the new path and the flash shows those new
+        // cells, intentionally surfacing the algorithm's choice.
         if (this.synced.cfgAutoBestPath) {
             const upper = word.toUpperCase();
             const allPaths = findPathsForWord(gameState.grid, upper);
             if (allPaths.length > 1) {
-                let bestPath = this.synced.selectedCells;
-                let bestScore = calculateWordScoreForGrid(gameState.grid, bestPath);
+                const userPath = this.synced.selectedCells;
+                const userScore = calculateWordScoreForGrid(gameState.grid, userPath);
+                let bestPath = userPath;
+                let bestScore = userScore;
                 for (const p of allPaths) {
                     const s = calculateWordScoreForGrid(gameState.grid, p);
                     if (s > bestScore) { bestScore = s; bestPath = p; }
                 }
-                if (bestPath !== this.synced.selectedCells) {
-                    console.log(`[autoBestPath] ${upper}: rerouted to higher-scoring path (${bestScore})`);
+                if (bestPath !== userPath) {
+                    console.log(`[autoBestPath] ${upper}: rerouted ${userScore} → ${bestScore}`);
                     this.synced.selectedCells = bestPath;
                 }
             }
@@ -1685,7 +2048,7 @@ export class LetterFastGame extends preact.Component {
                             gameState.matchedWords.push({ word: upperWord, points: result.points });
                             gameState.matchedWordsSet.add(upperWord);
                         }
-                        this.showWordAcceptedFeedback(result.points);
+                        this.showWordAcceptedFeedback(result.points, upperWord);
                     }
                 } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
@@ -1715,7 +2078,7 @@ export class LetterFastGame extends preact.Component {
         gameState.score += points;
         gameState.matchedWords.push({ word: upperWord, points });
         gameState.matchedWordsSet.add(upperWord);
-        this.showWordAcceptedFeedback(points);
+        this.showWordAcceptedFeedback(points, upperWord);
 
         // Useful for debugging
         /*
@@ -1807,7 +2170,7 @@ export class LetterFastGame extends preact.Component {
         const goalPoints = isCoop ? Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction)) : 0;
         const goalPct = isCoop && goalPoints > 0 ? Math.min(100, (totalScore / goalPoints) * 100) : 0;
         return (
-            <div className={css.hbox(10).alignItems("center").fillWidth}>
+            <div className={css.hbox(10).wrap.alignItems("center").fillWidth}>
                 <div className={css.vbox(4)}>
                     <div className={css.fontSize(28).width(90).textAlign("center")}>
                         {isCoop ? formatTime(gameState.elapsedTime) : formatTime(gameState.timeRemaining)}
@@ -1828,7 +2191,10 @@ export class LetterFastGame extends preact.Component {
                     style={{ border: "1px solid rgba(255,255,255,0.15)" }}
                 >
                     <span className={css.fontSize(20)}>{isCoop ? "🤝" : "🏆"}</span>
-                    <span className={css.fontSize(20).fontWeight("bold")}>{totalScore}</span>
+                    <span
+                        key={`score-${this.synced.scorePulseId}`}
+                        className={css.fontSize(20).fontWeight("bold") + " score-pulse"}
+                    >{totalScore}</span>
                     {isCoop && goalPoints > 0 && (
                         <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
                             / {goalPoints}
@@ -1849,6 +2215,23 @@ export class LetterFastGame extends preact.Component {
                         </div>
                     ))}
                 </div>
+                {!gameState.isMultiplayer && (gameState.status === "finished" || gameState.coopInfinite) && (
+                    <button
+                        onClick={async () => { await startGame(); }}
+                        className={css.hbox(6).alignItems("center")
+                            .pad2(8, 14).borderRadius(8)
+                            .fontSize(16).fontWeight("bold")
+                            .colorhsl(0, 0, 100).cursor("pointer")
+                            .border("2px solid rgba(120, 255, 160, 0.85)")
+                            + ""}
+                        style={{
+                            background: "linear-gradient(135deg, rgba(0,200,120,0.4), rgba(0,140,90,0.4))",
+                            boxShadow: "0 0 14px rgba(120, 255, 160, 0.45)",
+                        }}
+                    >
+                        ▶ Play Again
+                    </button>
+                )}
                 {gameState.isMultiplayer && gameState.gameId && (
                     <button
                         onClick={this.copyGameCode}
@@ -2157,6 +2540,30 @@ export class LetterFastGame extends preact.Component {
                                                 }}
                                             />
                                         )}
+                                        {this.synced.demoCells.some(c => c.row === ri && c.col === ci) && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                }
+                                                style={{
+                                                    border: "3px solid rgba(0, 212, 255, 0.4)",
+                                                    background: "rgba(0, 212, 255, 0.15)",
+                                                    pointerEvents: "none",
+                                                }}
+                                            />
+                                        )}
+                                        {this.synced.acceptedCells.some(c => c.row === ri && c.col === ci) && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                    + " accepted-cell"}
+                                                style={{
+                                                    border: "3px solid rgba(120, 255, 160, 0.95)",
+                                                    boxShadow: "0 0 14px rgba(120, 255, 160, 0.75)",
+                                                    background: "rgba(80, 220, 130, 0.35)",
+                                                }}
+                                            />
+                                        )}
                                         {isBlockedFlashing && (
                                             <div
                                                 className={css.absolute.pos(0, 0).fillBoth
@@ -2229,24 +2636,46 @@ export class LetterFastGame extends preact.Component {
                         className={css.absolute.pos(0, 0).size(this.synced.totalWidth, this.synced.totalHeight)}
                         style={{ pointerEvents: "none" }}
                     />
-                    {(Date.now() < gameState.timeoutUntil || this.synced.showTimeoutMessage) && (
-                        <div
-                            className={css.absolute.pos(0, 0).fillBoth
-                                .hsla(0, 0, 0, 0.7).hbox(0).justifyContent("center")
-                                .borderRadius(8)
-                                + (this.synced.timeoutFadingOut && " timeout-fadeout" || "")
-                            }
-                        >
+                    {(Date.now() < gameState.timeoutUntil || this.synced.showTimeoutMessage) && (() => {
+                        const total = this.synced.timeoutTotalMs;
+                        const elapsed = Date.now() - this.synced.timeoutStartedAt;
+                        const pct = total > 0 ? Math.max(0, Math.min(100, 100 - (elapsed / total) * 100)) : 0;
+                        return (
                             <div
-                                className={css.fontSize(24).fontWeight("bold")
-                                    .colorhsl(0, 0, 100).pad2(20)
-                                    .hsl(0, 0, 10).borderRadius(8)
+                                className={css.absolute.pos(0, 0).fillBoth
+                                    .hsla(0, 0, 0, 0.7).hbox(0).justifyContent("center").alignItems("center")
+                                    .borderRadius(8)
+                                    + (this.synced.timeoutFadingOut && " timeout-fadeout" || "")
                                 }
                             >
-                                {this.synced.timeoutMessage}
+                                <div
+                                    className={css.vbox(8).alignItems("center")
+                                        .colorhsl(0, 0, 100).pad2(20)
+                                        .hsl(0, 0, 10).borderRadius(8)
+                                        .minWidth(220)
+                                    }
+                                >
+                                    <div className={css.fontSize(24).fontWeight("bold")}>
+                                        {this.synced.timeoutMessage}
+                                    </div>
+                                    {this.synced.timeoutWord && (
+                                        <div className={css.fontSize(20).colorhsl(0, 80, 70).fontWeight("bold")}>
+                                            {this.synced.timeoutWord}
+                                        </div>
+                                    )}
+                                    {total > 0 && (
+                                        <div className={css.width(180).height(6).hsl(0, 0, 25).borderRadius(3) + ""}
+                                            style={{ overflow: "hidden" }}
+                                        >
+                                            <div className={css.height(6).hsl(0, 70, 55) + ""}
+                                                style={{ width: `${pct}%`, transition: "width 100ms linear" }}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        );
+                    })()}
                     {this.synced.showCancelZone && (
                         <div
                             className={css.absolute.size(CANCEL_ZONE_SIZE, CANCEL_ZONE_SIZE)
@@ -2523,15 +2952,21 @@ export class LetterFastGame extends preact.Component {
                                 type="number"
                                 min="5"
                                 max="100"
-                                value={this.synced.cfgCoopGoalPct}
+                                value={this.synced.cfgCoopGoalPctStr}
                                 disabled={!isHost}
                                 title={hostOnlyTitle}
-                                onInput={(e) => {
-                                    const v = parseInt(e.currentTarget.value, 10);
-                                    if (!isNaN(v) && v >= 5 && v <= 100) {
-                                        this.synced.cfgCoopGoalPct = v;
+                                onInput={(e) => { this.synced.cfgCoopGoalPctStr = e.currentTarget.value; }}
+                                onBlur={() => {
+                                    const v = parseInt(this.synced.cfgCoopGoalPctStr, 10);
+                                    const clamped = isNaN(v) ? this.synced.cfgCoopGoalPct : Math.max(5, Math.min(100, v));
+                                    this.synced.cfgCoopGoalPctStr = String(clamped);
+                                    if (clamped !== this.synced.cfgCoopGoalPct) {
+                                        this.synced.cfgCoopGoalPct = clamped;
                                         this.saveMenuConfig();
                                     }
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
                                 }}
                                 className={css.fontSize(13).pad2(4, 6).width(72) + ""}
                             />
@@ -2739,10 +3174,11 @@ export class LetterFastGame extends preact.Component {
                     const isYou = typeof w.playerIndex === "number"
                         && w.playerIndex === gameState.myPlayerIndex;
                     const blocked = w.blocked === true;
+                    const isRecent = i === 0 && this.synced.recentAcceptedWord === w.word.toUpperCase();
                     return (
                         <div
-                            key={i}
-                            className={css.hbox(8).fontSize(18).alignItems("center") + (blocked ? css.opacity(0.55) : "")}
+                            key={isRecent ? `recent-${this.synced.recentAcceptedToken}` : `w-${gameState.matchedWords.length - 1 - i}`}
+                            className={css.hbox(8).fontSize(18).alignItems("center") + (blocked ? css.opacity(0.55) : "") + (isRecent ? " word-reveal" : "")}
                             title={blocked ? "Already taken by another player" : undefined}
                         >
                             {showPrefix && letter && (
@@ -2837,6 +3273,35 @@ export class LetterFastGame extends preact.Component {
                     .blocked-flash-cell {
                         animation: blockedFlash 800ms ease-out forwards;
                         pointer-events: none;
+                    }
+                    @keyframes acceptedFlash {
+                        0%   { opacity: 0;   transform: scale(0.85); }
+                        25%  { opacity: 1;   transform: scale(1.05); }
+                        70%  { opacity: 0.9; transform: scale(1); }
+                        100% { opacity: 0;   transform: scale(1); }
+                    }
+                    .accepted-cell {
+                        animation: acceptedFlash ${ACCEPTED_CELL_FLASH_MS}ms ease-out forwards;
+                        pointer-events: none;
+                    }
+                    @keyframes wordReveal {
+                        0%   { opacity: 0; transform: translateY(-12px) scale(0.7); max-height: 0; }
+                        40%  { opacity: 1; transform: translateY(0)     scale(1.15); max-height: 80px; }
+                        100% { opacity: 1; transform: translateY(0)     scale(1);    max-height: 80px; }
+                    }
+                    .word-reveal {
+                        animation: wordReveal ${WORD_REVEAL_DURATION_MS}ms cubic-bezier(0.18, 0.9, 0.3, 1.2);
+                        transform-origin: left center;
+                    }
+                    @keyframes scorePulse {
+                        0%   { transform: scale(1);    color: rgba(255,255,255,1); text-shadow: 0 0 0 rgba(120,255,160,0); }
+                        30%  { transform: scale(1.5);  color: rgb(160,255,190);    text-shadow: 0 0 14px rgba(120,255,160,0.95); }
+                        100% { transform: scale(1);    color: rgba(255,255,255,1); text-shadow: 0 0 0 rgba(120,255,160,0); }
+                    }
+                    .score-pulse {
+                        display: inline-block;
+                        animation: scorePulse ${SCORE_PULSE_DURATION_MS}ms ease-out;
+                        transform-origin: center;
                     }
                 `}</style>
                 <div className={css.fillBoth.vbox(SECTION_GAP).alignItems("center")}>

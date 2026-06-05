@@ -4,7 +4,7 @@
     "main": "index.js",
     "license": "MIT",
     "dependencies": {
-        "sliftutils": "^1.2.2"
+        "sliftutils": "^1.2.26"
     },
     "scripts": {
         "server": "yarn typenode ./web/server.ts",
@@ -22,6 +22,8 @@
         "deploy-server": "local-deploy-server.bat",
         "deploy-app": "local-deploy-app.bat",
         "deploy": "local-deploy-static.bat && local-deploy-app.bat",
+        "deploy-claude": "set PATH=.;%PATH% && local-deploy-static.bat && local-deploy-app.bat",
+        "deploy-claude": "set PATH=.;%PATH% && local-deploy-static.bat && local-deploy-app.bat",
         "deploy-static-mac": "bash local-deploy-static.sh",
         "d-mac": "yarn deploy-static-mac",
         "deploy-server-mac": "bash local-deploy-server.sh",

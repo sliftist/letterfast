@@ -11,20 +11,25 @@ export interface WordAnalysisResult {
     commonMissedWords: WordWithScore[];
     valuableMissedWords: WordWithScore[];
     nearMissWords: WordWithScore[];
+    // Every valid word on the grid that no player found, sorted by points desc.
+    // When `allFoundWords` is omitted this is the same set as the player's own
+    // misses.
+    allMissedWords: WordWithScore[];
 }
 
 export async function analyzeWords(config: {
     grid: GridCell[][];
     foundWords: { word: string; points: number }[];
+    allFoundWords?: { word: string; points: number }[];
 }): Promise<WordAnalysisResult> {
     const trie = await getWordTrie();
     const allWordsResult = findAllWordsInGrid(config.grid, trie);
     const allValidWords = Array.from(allWordsResult.words);
     const allWordsOrdered = await getWords();
-    
+
     const foundWordsSet = new Set(config.foundWords.map(w => w.word.toLowerCase()));
     const missedWords = allValidWords.filter(word => !foundWordsSet.has(word.toLowerCase()));
-    
+
     const missedWordsWithScores: WordWithScore[] = [];
     const missedWordsSet = new Set<string>();
     for (let word of missedWords) {
@@ -35,7 +40,13 @@ export async function analyzeWords(config: {
             missedWordsSet.add(word.toLowerCase());
         }
     }
-    
+
+    const allFoundSet = new Set((config.allFoundWords ?? config.foundWords).map(w => w.word.toLowerCase()));
+    const allMissedWords = missedWordsWithScores
+        .filter(w => !allFoundSet.has(w.word.toLowerCase()))
+        .slice()
+        .sort((a, b) => b.points - a.points);
+
     const commonMissedWords = findCommonMissedWords(missedWordsWithScores, allWordsOrdered);
     const valuableMissedWords = findValuableMissedWords(missedWordsWithScores);
     const nearMissWords = await findNearMissWords({
@@ -43,11 +54,12 @@ export async function analyzeWords(config: {
         foundWords: config.foundWords,
         missedWords: missedWordsSet,
     });
-    
+
     return {
         commonMissedWords,
         valuableMissedWords,
         nearMissWords,
+        allMissedWords,
     };
 }
 

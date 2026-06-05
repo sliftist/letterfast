@@ -1,9 +1,23 @@
 
-When the game is over and we close the GameOver screen, if we click on the board, it should start a new game. 
+0) Highlight when you get a word, so it feels better to get a word.
+
+1) FIX board importing from url not working (It seems to clobber the url and reset the board to something else)
+
+2) Keep track of the history of the games, and allow us to view a previous game state, like when we are finished (so we can see the board, our picks, our score, the final time, and view the game over screen as well). Track it using DiskCollectionRawBrowser from sliftutils.
+
+3) update the game over screen so that it'll say whether you won or not. And if we're doing it based on a score limit, you should say the total time at the top. Right now it just says game over when you won. So it's almost like saying you lost, even though it should be saying that you won. Although if it's a score limit, we don't say win or lose, we just the time the thing. 
+
+4) Add a campaign type thing where the percentage score gets higher and higher that you need to get, but you also just can retry it, that same percentage score with a different board?
+    - I'm thinking maybe we have it a thing where the percentage gets higher every time you beat it and lower every time you lose?
+
+5) We want some kind of like point system and progressions, and maybe some kind of a bonuses thing. 
+
+6) Cooperative mode in the campaign. Maybe you can get people to help you beat a board. Maybe some kind of thing where the boards are cooperative and groups of people play on them, but it's still a campaign system. Maybe with just those specific groups of people, so you can be in multiple shared things at once, and the board resets every certain amount of time, either daily or weekly or certain days of the week. 
+
 
 Add a setting that changes the minimum letters to four. 
 
-Add a setting where you have a target score percentage, and once you hit that, we end it, displaying the time in big letters on the end screen, and storing it in the history (making the goal speed not total score).
+
 
 Move the play again button to the top of Game Over, under the score.
 

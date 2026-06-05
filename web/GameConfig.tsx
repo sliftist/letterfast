@@ -2,7 +2,7 @@ import preact from "preact";
 import { css } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import { pageURL, joinGameIdURL } from "./Page";
-import { changeGridSize, getCurrentGridSize, gameState, applySettings } from "./GameState";
+import { changeGridSize, getCurrentGridSize, gameState, applySettings, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
 
@@ -41,7 +41,7 @@ export function loadSavedConfig(): SavedConfig | undefined {
                         ? "competitive-shared"
                         : "competitive",
                 coopGoalFraction: typeof config.coopGoalFraction === "number" && config.coopGoalFraction > 0 && config.coopGoalFraction <= 1
-                    ? config.coopGoalFraction : 0.5,
+                    ? config.coopGoalFraction : DEFAULT_COOP_GOAL_FRACTION,
                 autoBestPath: config.autoBestPath !== false,
             };
         }
@@ -68,8 +68,8 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         gameDuration: 90000,
         showRemainingWordsPerCell: false,
         showTotalPossibleScore: false,
-        gameMode: "competitive",
-        coopGoalFraction: 0.5,
+        gameMode: DEFAULT_GAME_MODE,
+        coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         autoBestPath: true,
     };
 }
@@ -80,6 +80,7 @@ export class GameConfig extends preact.Component {
         customWidth: 4,
         customHeight: 4,
         gameDuration: 90000,
+        gameDurationStr: "90",
         showRemainingWordsPerCell: false,
         showTotalPossibleScore: false,
         gameIdToJoin: "",
@@ -133,6 +134,7 @@ export class GameConfig extends preact.Component {
             this.synced.customWidth = size.width;
             this.synced.customHeight = size.height;
         }
+        this.synced.gameDurationStr = String(Math.round(this.synced.gameDuration / 1000));
 
         const joinGameId = joinGameIdURL.value;
         if (joinGameId) {
@@ -270,13 +272,19 @@ export class GameConfig extends preact.Component {
                                 type="number"
                                 min="10"
                                 max="3600"
-                                value={Math.round(this.synced.gameDuration / 1000)}
-                                onInput={(e) => {
-                                    let value = parseInt(e.currentTarget.value, 10);
-                                    if (!isNaN(value) && value >= 10 && value <= 3600) {
-                                        this.synced.gameDuration = value * 1000;
+                                value={this.synced.gameDurationStr}
+                                onInput={(e) => { this.synced.gameDurationStr = e.currentTarget.value; }}
+                                onBlur={() => {
+                                    const v = parseInt(this.synced.gameDurationStr, 10);
+                                    const clamped = isNaN(v) ? Math.round(this.synced.gameDuration / 1000) : Math.max(10, Math.min(3600, v));
+                                    this.synced.gameDurationStr = String(clamped);
+                                    if (clamped * 1000 !== this.synced.gameDuration) {
+                                        this.synced.gameDuration = clamped * 1000;
                                         this.saveCurrentConfig();
                                     }
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
                                 }}
                                 className={css.fontSize(20).pad2(12).width(100) + ""}
                             />

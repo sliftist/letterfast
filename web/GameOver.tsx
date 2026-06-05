@@ -1,7 +1,7 @@
 import * as preact from "preact";
 import { observer } from "sliftutils/render-utils/observer";
 import { css } from "typesafecss";
-import { GameOverState, gameHistory, gameState } from "./GameState";
+import { GameOverState, gameHistory, gameState, resumeCoopGame } from "./GameState";
 import { sort } from "socket-function/src/misc";
 import { observable } from "mobx";
 import { analyzeWords, WordAnalysisResult } from "./WordAnalysis";
@@ -10,6 +10,12 @@ import { isNode } from "typesafecss";
 import { signPayload, getPublicKey } from "./CryptoIdentity";
 import { getRPCClient } from "./rpcClient";
 import { render } from "preact";
+
+function sumPoints(words: { points: number }[]): number {
+    let total = 0;
+    for (const w of words) total += w.points;
+    return total;
+}
 
 let modalRoot: HTMLDivElement | undefined;
 let modalContainer: HTMLDivElement | undefined;
@@ -105,14 +111,28 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         }, 250);
 
         const selfPlayer = this.props.state.playerResults.find(p => p.isSelf);
+        const allFoundMap = new Map<string, { word: string; points: number }>();
+        for (const p of this.props.state.playerResults) {
+            for (const w of p.matchedWords) {
+                allFoundMap.set(w.word.toLowerCase(), w);
+            }
+        }
+        const allFoundWords = Array.from(allFoundMap.values());
         if (selfPlayer) {
             const analysis = await analyzeWords({
                 grid: this.props.state.grid,
                 foundWords: selfPlayer.matchedWords,
+                allFoundWords,
             });
             this.synced.analysis = analysis;
             this.synced.isLoading = false;
         } else {
+            const analysis = await analyzeWords({
+                grid: this.props.state.grid,
+                foundWords: allFoundWords,
+                allFoundWords,
+            });
+            this.synced.analysis = analysis;
             this.synced.isLoading = false;
         }
     }
@@ -222,9 +242,79 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     >
                         ×
                     </button>
-                    <div className={css.fontSize(32).fontWeight("bold").textAlign("center")}>
-                        Game Over!
-                    </div>
+                    {(() => {
+                        const isCoopGoal = gameState.gameMode === "cooperative"
+                            && !gameState.isMultiplayer
+                            && !isChallengeMode
+                            && selfPlayer !== undefined
+                            && state.totalPossibleScore > 0;
+                        if (!isCoopGoal) {
+                            return (
+                                <div className={css.fontSize(32).fontWeight("bold").textAlign("center")}>
+                                    Game Over!
+                                </div>
+                            );
+                        }
+                        const pct = Math.round(selfPlayer.score / state.totalPossibleScore * 100);
+                        const goalPct = Math.round(gameState.coopGoalFraction * 100);
+                        const reachedGoal = pct >= goalPct;
+                        return (
+                            <div className={css.vbox(4).alignItems("center").textAlign("center")}>
+                                <div className={css.fontSize(36).fontWeight("bold")
+                                    + (reachedGoal ? css.colorhsl(120, 80, 70) : css.colorhsl(0, 0, 100))
+                                }>
+                                    {reachedGoal ? "🎉 Win!" : "Game Over"}
+                                </div>
+                                <div className={css.fontSize(20).opacity(0.85)}>
+                                    Found {pct}% of {goalPct}% goal
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {(!gameState.isMultiplayer || isChallengeMode) && (
+                        <div className={css.vbox(8)}>
+                            <button
+                                onClick={() => {
+                                    challengeURL.reset();
+                                    closeAllModals();
+                                    onPlayAgain();
+                                }}
+                                className={css.fillWidth.hbox(0).justifyContent("center").alignItems("center")
+                                    .pad2(18, 28).borderRadius(12)
+                                    .fontSize(28).fontWeight("bold")
+                                    .colorhsl(0, 0, 100).cursor("pointer")
+                                    .border("3px solid rgba(120, 255, 160, 0.9)")
+                                    + ""}
+                                style={{
+                                    background: "linear-gradient(135deg, rgba(0,200,120,0.55), rgba(0,140,90,0.55))",
+                                    boxShadow: "0 0 24px rgba(120, 255, 160, 0.55)",
+                                }}
+                            >
+                                ▶ Play Again
+                            </button>
+                            {gameState.gameMode === "cooperative" && !gameState.isMultiplayer && !isChallengeMode && (
+                                <button
+                                    onClick={() => {
+                                        closeAllModals();
+                                        resumeCoopGame();
+                                    }}
+                                    className={css.fillWidth.hbox(0).justifyContent("center").alignItems("center")
+                                        .pad2(14, 24).borderRadius(10)
+                                        .fontSize(22).fontWeight("bold")
+                                        .colorhsl(0, 0, 100).cursor("pointer")
+                                        .border("2px solid rgba(120, 200, 255, 0.9)")
+                                        + ""}
+                                    style={{
+                                        background: "linear-gradient(135deg, rgba(0,140,220,0.45), rgba(0,90,180,0.45))",
+                                        boxShadow: "0 0 16px rgba(120, 200, 255, 0.4)",
+                                    }}
+                                >
+                                    ↻ Continue Game
+                                </button>
+                            )}
+                        </div>
+                    )}
 
                     {!isSinglePlayer && winner && (
                         <div className={css.vbox(8).textAlign("center")}>
@@ -284,7 +374,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                             {this.synced.analysis.commonMissedWords.length > 0 && (
                                                 <div className={css.vbox(8)}>
                                                     <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
-                                                        Common Missed Words
+                                                        Common Missed Words ({this.synced.analysis.commonMissedWords.length}, {sumPoints(this.synced.analysis.commonMissedWords)})
                                                     </div>
                                                     <div className={css.hbox(8).wrap}>
                                                         {this.synced.analysis.commonMissedWords.map((w, i) => (
@@ -302,7 +392,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                             {this.synced.analysis.valuableMissedWords.length > 0 && (
                                                 <div className={css.vbox(8)}>
                                                     <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
-                                                        Most Valuable Missed Words
+                                                        Most Valuable Missed Words ({this.synced.analysis.valuableMissedWords.length}, {sumPoints(this.synced.analysis.valuableMissedWords)})
                                                     </div>
                                                     <div className={css.hbox(8).wrap}>
                                                         {this.synced.analysis.valuableMissedWords.map((w, i) => (
@@ -320,7 +410,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                             {this.synced.analysis.nearMissWords.length > 0 && (
                                                 <div className={css.vbox(8)}>
                                                     <div className={css.fontSize(20).fontWeight("bold").opacity(0.5)}>
-                                                        Near Miss Opportunities
+                                                        Near Miss Opportunities ({this.synced.analysis.nearMissWords.length}, {sumPoints(this.synced.analysis.nearMissWords)})
                                                     </div>
                                                     <div className={css.hbox(8).wrap}>
                                                         {this.synced.analysis.nearMissWords.map((w, i) => (
@@ -340,7 +430,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                     {words.length > 0 && (
                                         <div className={css.vbox(6)}>
                                             <div className={css.fontSize(isSinglePlayer ? 20 : 16).fontWeight("bold").colorhsl(120, 60, 60)}>
-                                                {isSinglePlayer ? "Words You Found" : `Words`} ({words.length}):
+                                                {isSinglePlayer ? "Words You Found" : `Words`} ({words.length}, {sumPoints(words)}):
                                             </div>
                                             <div className={css.hbox(8).wrap.overflowAuto.maxHeight(200)}>
                                                 {sort(words.slice(), w => -w.points).map((w, i) => {
@@ -362,6 +452,24 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             );
                         })}
                     </div>
+
+                    {!this.synced.isLoading && this.synced.analysis && this.synced.analysis.allMissedWords.length > 0 && (
+                        <div className={css.vbox(6)}>
+                            <div className={css.fontSize(18).fontWeight("bold").opacity(0.7)}>
+                                Words Nobody Found ({this.synced.analysis.allMissedWords.length}, {sumPoints(this.synced.analysis.allMissedWords)})
+                            </div>
+                            <div className={css.hbox(8).wrap.overflowAuto.maxHeight(220)}>
+                                {this.synced.analysis.allMissedWords.map((w, i) => (
+                                    <div key={i} className={css.fontSize(14)
+                                        .pad2(6, 4).borderRadius(4)
+                                        .hsl(0, 30, 30).opacity(0.6)
+                                    }>
+                                        {w.word} ({w.points})
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {gameState.isMultiplayer && !isChallengeMode ? (() => {
                         const countdownEnd = gameState.restartCountdownEnd;
@@ -397,12 +505,24 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             </div>
                         );
                     })() : (
-                        <button onClick={() => {
-                            challengeURL.reset();
-                            closeAllModals();
-                            onPlayAgain();
-                        }}>
-                            Play Again
+                        <button
+                            onClick={() => {
+                                challengeURL.reset();
+                                closeAllModals();
+                                onPlayAgain();
+                            }}
+                            className={css.fillWidth.hbox(0).justifyContent("center").alignItems("center")
+                                .pad2(18, 28).borderRadius(12)
+                                .fontSize(28).fontWeight("bold")
+                                .colorhsl(0, 0, 100).cursor("pointer")
+                                .border("3px solid rgba(120, 255, 160, 0.9)")
+                                + ""}
+                            style={{
+                                background: "linear-gradient(135deg, rgba(0,200,120,0.55), rgba(0,140,90,0.55))",
+                                boxShadow: "0 0 24px rgba(120, 255, 160, 0.55)",
+                            }}
+                        >
+                            ▶ Play Again
                         </button>
                     )}
 

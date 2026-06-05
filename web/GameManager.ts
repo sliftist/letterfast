@@ -1,4 +1,4 @@
-import { GridCell, getWordSet, calculateWordScoreForGrid, isAdjacent, GAME_DURATION } from "./GameState";
+import { GridCell, getWordSet, calculateWordScoreForGrid, isAdjacent, GAME_DURATION, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION } from "./GameState";
 import { generateGameGrid } from "./GridGenerator";
 import { AllHandlers, ClientHandlers } from "./multiplayerFunctionHandlers";
 import { FunctionCallerInterface } from "./rpc/FunctionCaller";
@@ -88,8 +88,8 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
         totalPossibleScore: gridMetadata.totalPossibleScore,
         showRemainingWordsPerCell: false,
         showTotalPossibleScore: false,
-        gameMode: "competitive",
-        coopGoalFraction: 0.5,
+        gameMode: DEFAULT_GAME_MODE,
+        coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
     };
 
@@ -121,8 +121,8 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         totalPossibleScore: gridMetadata.totalPossibleScore,
         showRemainingWordsPerCell,
         showTotalPossibleScore,
-        gameMode: "competitive",
-        coopGoalFraction: 0.5,
+        gameMode: DEFAULT_GAME_MODE,
+        coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
     };
 

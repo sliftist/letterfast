@@ -3154,7 +3154,6 @@ asking
 asks
 asleep
 asocial
-asp
 asparagine
 asparagus
 aspartame
@@ -25083,7 +25082,6 @@ girt
 girth
 girths
 girts
-gis
 gist
 git
 gits
@@ -30544,7 +30542,6 @@ inquisitors
 inroad
 inroads
 inrush
-ins
 insane
 insanely
 insanity

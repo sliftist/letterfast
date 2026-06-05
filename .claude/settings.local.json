@@ -3,7 +3,9 @@
     "allow": [
       "Bash(yarn type *)",
       "WebFetch(domain:github.com)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "PowerShell($env:PATH = \".;$env:PATH\"; cmd /c \"yarn deploy\")",
+      "Bash(yarn deploy-claude *)"
     ]
   }
 }
