@@ -2226,8 +2226,13 @@ export class LetterFastGame extends preact.Component {
                         className={css.fontSize(20).fontWeight("bold") + " score-pulse"}
                     >{totalScore}</span>
                     {isCoop && goalPoints > 0 && (
-                        <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
-                            / {goalPoints}
+                        <span className={css.vbox(0).alignItems("center")}>
+                            <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                                / {goalPoints}
+                            </span>
+                            <span className={css.fontSize(10).colorhsl(200, 60, 65) + ""} style={{ marginTop: "-2px" }}>
+                                {Math.round(gameState.coopGoalFraction * 100)}% goal
+                            </span>
                         </span>
                     )}
                     {!isCoop && gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (

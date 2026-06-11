@@ -1,6 +1,4 @@
 
-0) Deploy to github pages instead (making cloudflare point to that)
-
 1) Save games to disk, so server can reboot without breaking games
     - If the reboot is fast enough, which it should be, and everyone reconnects, it should be basically transparent for the server to update. 
 
