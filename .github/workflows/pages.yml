@@ -1,0 +1,47 @@
+name: Deploy to GitHub Pages
+
+# Push to main → rebuild → publish to the `gh-pages` branch. GitHub Pages
+# is configured (Settings → Pages → "Deploy from a branch" → `gh-pages` /
+# root) to serve that branch.
+#
+# Built artifacts (`build-web/`) live ONLY on the `gh-pages` branch so
+# main stays source-only. The gh-pages branch is force-pushed each run by
+# the action so its history doesn't grow over time.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build static site
+        run: yarn build-web
+
+      - name: Publish to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./build-web
+          force_orphan: true
+          commit_message: "Deploy ${{ github.sha }}"
