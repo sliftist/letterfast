@@ -5,7 +5,10 @@
       "WebFetch(domain:github.com)",
       "Bash(curl *)",
       "PowerShell($env:PATH = \".;$env:PATH\"; cmd /c \"yarn deploy\")",
-      "Bash(yarn deploy-claude *)"
+      "Bash(yarn deploy-claude *)",
+      "Bash(git *)",
+      "Bash(cp -r D:/repos/letterfast/build-web/* D:/repos/letterfast-ghpages/)",
+      "Read(//d/repos/letterfast-ghpages/**)"
     ]
   }
 }

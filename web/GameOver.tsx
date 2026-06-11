@@ -276,7 +276,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 </div>
                                 {winner && (
                                     <div className={css.fontSize(20).fontWeight("bold")}>
-                                        {winnerName} won with <span className={css.colorhsl(120, 70, 70) + ""}>{winner.word}</span>
+                                        {winnerName} {gameState.isMultiplayer ? "reached the goal with" : "won with"} <span className={css.colorhsl(120, 70, 70) + ""}>{winner.word}</span>
                                         {typeof winner.points === "number" && (
                                             <span className={css.fontSize(16).opacity(0.7) + ""}> (+{winner.points})</span>
                                         )}

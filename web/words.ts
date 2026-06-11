@@ -20,76 +20,12 @@ async function fetchWords(): Promise<string[]> {
 }
 
 async function fetchWordsBrowser(): Promise<string[]> {
-    if (window.location.protocol === "file:" || window.location.hostname === "localhost") {
-        return fetchWordsFromGeneratedJS();
-    }
-
-    const url = "./words.txt.gz";
-
-    const cacheKey = "letterfast_words_cache3";
-    const metaKey = "letterfast_words_meta3";
-
-    let shouldDownload = true;
-    let cachedMeta: CacheMetadata | undefined;
-
-    try {
-        const metaStr = localStorage.getItem(metaKey);
-        if (metaStr) {
-            cachedMeta = JSON.parse(metaStr);
-            if (!cachedMeta) throw new Error("Failed to parse cache metadata");
-
-            const age = Date.now() - cachedMeta.timestamp;
-
-            if (age < CACHE_DURATION) {
-                const cachedData = localStorage.getItem(cacheKey);
-                if (cachedData && cachedMeta.base64Data) {
-                    return decompressBrowser(base64ToBuffer(cachedMeta.base64Data));
-                }
-            } else {
-                const headResponse = await fetch(url, { method: "HEAD" });
-                const contentLength = parseInt(headResponse.headers.get("content-length") || "0");
-
-                if (contentLength === cachedMeta.contentLength) {
-                    cachedMeta.timestamp = Date.now();
-                    localStorage.setItem(metaKey, JSON.stringify(cachedMeta));
-
-                    const cachedData = localStorage.getItem(cacheKey);
-                    if (cachedData && cachedMeta.base64Data) {
-                        return decompressBrowser(base64ToBuffer(cachedMeta.base64Data));
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.warn("Cache check failed, downloading fresh:", error);
-    }
-
-    const response = await fetch(url, {
-        credentials: "omit",
-        mode: "cors",
-    });
-    if (!response.ok) {
-        throw new Error(`Failed to fetch words: ${response.status} ${response.statusText}`);
-    }
-
-    const compressedBuffer = await response.arrayBuffer();
-    const contentLength = compressedBuffer.byteLength;
-
-    const base64Data = bufferToBase64(new Uint8Array(compressedBuffer));
-    const meta: CacheMetadata = {
-        timestamp: Date.now(),
-        contentLength,
-        base64Data
-    };
-
-    try {
-        localStorage.setItem(metaKey, JSON.stringify(meta));
-        localStorage.setItem(cacheKey, base64Data);
-    } catch (error) {
-        console.warn("Failed to cache words:", error);
-    }
-
-    return decompressBrowser(new Uint8Array(compressedBuffer));
+    // Every static build emits `words.generated.js` next to `browser.js`, so
+    // we can use it everywhere instead of fetching a separately-hosted
+    // `words.txt.gz` (which only existed on the old quentinbrooks deploy and
+    // 404s on GitHub Pages). Browser HTTP-cache handles repeat loads — no
+    // need for the localStorage round-trip we used for the .gz blob.
+    return fetchWordsFromGeneratedJS();
 }
 
 async function fetchWordsFromGeneratedJS(): Promise<string[]> {
@@ -228,14 +164,6 @@ async function downloadNode(url: string, https: any): Promise<Buffer> {
             response.on("error", reject);
         }).on("error", reject);
     });
-}
-
-function bufferToBase64(buffer: Uint8Array): string {
-    let binary = "";
-    for (let i = 0; i < buffer.length; i++) {
-        binary += String.fromCharCode(buffer[i]);
-    }
-    return btoa(binary);
 }
 
 function base64ToBuffer(base64: string): Uint8Array {
