@@ -8,7 +8,8 @@
       "Bash(yarn deploy-claude *)",
       "Bash(git *)",
       "Bash(cp -r D:/repos/letterfast/build-web/* D:/repos/letterfast-ghpages/)",
-      "Read(//d/repos/letterfast-ghpages/**)"
+      "Read(//d/repos/letterfast-ghpages/**)",
+      "Bash(yarn deploy-letterquick *)"
     ]
   }
 }

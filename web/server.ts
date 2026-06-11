@@ -1,4 +1,5 @@
 import { startServer } from "./multiplayerFunctionHandlers";
+import { loadOrGenerateCert, startCertMaintenance, ensureARecord } from "./certManager";
 import * as fs from "fs";
 import * as http from "http";
 import * as https from "https";
@@ -199,25 +200,29 @@ function startStaticServer(): void {
     });
 }
 
-async function main() {
-    const certPath = "/etc/letsencrypt/live/quentinbrooks.com-0001/fullchain.pem";
-    const keyPath = "/etc/letsencrypt/live/quentinbrooks.com-0001/privkey.pem";
+const CERT_DOMAIN = "letterquick.com";
+const MULTIPLAYER_HOST = "multiplayer.letterquick.com";
+const RPC_PORT = 8880;
 
-    if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-        startServer({
-            port: 8880,
-            ssl: {
-                certPath,
-                keyPath
-            }
+async function main() {
+    // The Cloudflare token (used for both the DNS-01 cert challenge and the A-record upkeep) is read by sliftutils from ./cloudflare.json. Without it we're in local dev — plain ws is fine there.
+    if (fs.existsSync("cloudflare.json")) {
+        const keyCert = await loadOrGenerateCert(CERT_DOMAIN);
+        const server = startServer({ port: RPC_PORT, ssl: keyCert }) as https.Server;
+        startCertMaintenance({
+            domain: CERT_DOMAIN,
+            onRenewed: kc => server.setSecureContext({ key: kc.key, cert: kc.cert }),
+        });
+        // Not awaited: the A record isn't needed for the server to listen, and setRecord blocks for the DNS TTL when the IP changed.
+        void ensureARecord(MULTIPLAYER_HOST).catch(err => {
+            console.error(`Failed to ensure A record for ${MULTIPLAYER_HOST}:`, (err as Error).stack ?? err);
         });
     } else {
-        startServer({ port: 8880 });
+        console.warn("No cloudflare.json found — starting without SSL (local dev mode)");
+        startServer({ port: RPC_PORT });
     }
 
     startStaticServer();
 }
 
-main().catch(console.error);
-// Suppress an unused-import warning for https (kept for future SSL static hosting).
-void https;
+main().catch(err => console.error("Server startup failed:", (err as Error).stack ?? err));

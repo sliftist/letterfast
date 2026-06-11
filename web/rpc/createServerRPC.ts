@@ -1,24 +1,21 @@
 import * as http from "http";
 import * as https from "https";
-import * as fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { createFunctionCaller } from "./FunctionCaller";
 
 export function createServerRPC<T extends Record<string, (...args: any[]) => Promise<any>>>(handlers: T) {
-    return function startServer(config: { 
+    // Takes PEM strings (not paths) so the caller can renew the cert and hot-swap it into the returned server via setSecureContext without a restart.
+    return function startServer(config: {
         port: number;
         ssl?: {
-            certPath: string;
-            keyPath: string;
+            cert: string;
+            key: string;
         };
     }) {
         let server: http.Server | https.Server;
 
         if (config.ssl) {
-            const cert = fs.readFileSync(config.ssl.certPath, "utf8");
-            const key = fs.readFileSync(config.ssl.keyPath, "utf8");
-            
-            server = https.createServer({ cert, key }, (req, res) => {
+            server = https.createServer({ cert: config.ssl.cert, key: config.ssl.key }, (req, res) => {
                 res.writeHead(200, { "Content-Type": "text/plain" });
                 res.end("WebSocket RPC Server (Secure)");
             });

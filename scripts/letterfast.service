@@ -1,0 +1,15 @@
+[Unit]
+Description=Letterfast multiplayer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/letterfast-server
+# bash -l so yarn/node resolve from the login profile PATH regardless of how they were installed.
+ExecStart=/bin/bash -lc "yarn server"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

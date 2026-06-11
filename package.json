@@ -4,7 +4,7 @@
     "main": "index.js",
     "license": "MIT",
     "dependencies": {
-        "sliftutils": "^1.2.26"
+        "sliftutils": "^1.2.39"
     },
     "scripts": {
         "server": "yarn typenode ./web/server.ts",
@@ -17,17 +17,9 @@
         "watch": "yarn watch-web",
         "build": "yarn build-web",
         "upload-words": "yarn build-words && node scripts/uploadWords.js",
-        "deploy-static": "local-deploy-static.bat",
-        "d": "yarn deploy-static",
-        "deploy-server": "local-deploy-server.bat",
-        "deploy-app": "local-deploy-app.bat",
-        "deploy": "local-deploy-static.bat && local-deploy-app.bat",
-        "deploy-claude": "git add -A && (git diff --cached --quiet || git commit -m \"Deploy\") && git push origin main",
-        "deploy-static-mac": "bash local-deploy-static.sh",
-        "d-mac": "yarn deploy-static-mac",
-        "deploy-server-mac": "bash local-deploy-server.sh",
-        "deploy-app-mac": "bash local-deploy-app.sh",
-        "deploy-mac": "bash local-deploy-static.sh && bash local-deploy-app.sh"
+        "deploy-server": "node scripts/deployServer.js",
+        "deploy-letterquick": "node scripts/deployServer.js a.querysubtest.com",
+        "deploy-claude": "git add -A && (git diff --cached --quiet || git commit -m \"Deploy\") && git push origin main"
     },
     "resolutions": {
         "preact": "npm:preact-old-types@*",
