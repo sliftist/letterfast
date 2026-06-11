@@ -44,4 +44,6 @@ jobs:
           publish_branch: gh-pages
           publish_dir: ./build-web
           force_orphan: true
+          # Persist the custom domain — the force-orphan push would otherwise wipe the CNAME file GitHub uses to bind letterquick.com to this site.
+          cname: letterquick.com
           commit_message: "Deploy ${{ github.sha }}"
