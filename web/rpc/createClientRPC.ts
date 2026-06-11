@@ -2,7 +2,8 @@ import { createFunctionCaller, FunctionCallerInterface } from "./FunctionCaller"
 
 export function createClientRPC<T extends Record<string, (...args: any[]) => Promise<any>>>(
     url: string,
-    clientHandlers: T
+    clientHandlers: T,
+    onDisconnect?: () => void
 ): T {
     const ws = new WebSocket(url);
     const messageHandlers: ((message: string) => void)[] = [];
@@ -10,6 +11,9 @@ export function createClientRPC<T extends Record<string, (...args: any[]) => Pro
     let isClosed = false;
     const pendingMessages: string[] = [];
     const disconnectHandlers: (() => void)[] = [];
+    if (onDisconnect) {
+        disconnectHandlers.push(onDisconnect);
+    }
 
     const fireDisconnect = () => {
         if (isClosed) return;

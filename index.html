@@ -6,6 +6,14 @@
     <title>Letter Quick</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* Inter's capital I is a bare vertical bar, indistinguishable from L
+         * in the grid. Override just U+0049 with a serif font that has top
+         * and bottom bars; every other character falls through to Inter. */
+        @font-face {
+            font-family: 'CapI-Serif';
+            src: local('Georgia'), local('Times New Roman'), local('Times'), local('serif');
+            unicode-range: U+0049;
+        }
         * {
             box-sizing: border-box;
             overflow-wrap: break-word;
@@ -13,7 +21,7 @@
             word-break: break-word;
         }
         body, button, textarea, .FullscreenModal {
-            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+            font-family: 'CapI-Serif', 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
             font-size: 12px;
         }
         body, .FullscreenModal {
@@ -37,7 +45,7 @@
 </head>
 <body>
     <div id="app"></div>
-    <script src="./browser.js"></script>
+    <script src="./browser.js" crossorigin="anonymous"></script>
 </body>
 </html>
 

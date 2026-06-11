@@ -5,6 +5,7 @@ import { observer } from "sliftutils/render-utils/observer";
 import { LetterFastGame } from "./LetterFastGame";
 import { GridCell } from "./GameState";
 import { NotificationUI } from "./NotificationUI";
+import { ErrorToast } from "./ErrorToast";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
@@ -55,6 +56,7 @@ export class Page extends preact.Component {
             }>
                 <NotificationUI />
                 <LetterFastGame />
+                <ErrorToast />
             </div>
         );
     }

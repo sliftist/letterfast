@@ -28,9 +28,10 @@ import {
     DEFAULT_COOP_GOAL_FRACTION,
 } from "./GameState";
 import { findPathsForWord, findAllWordsInGrid, getWordTrie } from "./GridGenerator";
+import { getClientId } from "./ClientId";
 import { VoiceController, StreamingWord } from "./VoiceMode";
 import { preloadHomophoneDict, getHomophones, findPhoneticMatches } from "./Homophones";
-import { getRPCClient, resetRPCClient } from "./rpcClient";
+import { getRPCClient, resetRPCClient, setRPCDisconnectHandler } from "./rpcClient";
 import { loadSavedConfig, saveConfig } from "./GameConfig";
 import { ConnectionManager } from "./ConnectionManager";
 import { showGameOver } from "./GameOver";
@@ -50,6 +51,8 @@ const VOICE_RESET_GAP_MS = 1000;
 const PEER_FLASH_STAGGER_MS = 100;
 const PEER_FLASH_DURATION_MS = 500;
 const ACCEPTED_CELL_FLASH_MS = 700;
+// How long the score-bar segment of the player who already found your word glows.
+const PLAYER_HIGHLIGHT_DURATION_MS = 1500;
 const WORD_REVEAL_DURATION_MS = 700;
 const SCORE_PULSE_DURATION_MS = 600;
 const DEMO_WORD_LENGTH = 3;
@@ -335,6 +338,9 @@ export class LetterFastGame extends preact.Component {
         menuBackdropDown: false,
         peerFlashCells: [] as { row: number; col: number; id: number }[],
         blockedFlashCells: [] as { row: number; col: number; id: number }[],
+        alreadyFlashCells: [] as { row: number; col: number; id: number }[],
+        highlightPlayerIndex: undefined as number | undefined,
+        highlightPlayerToken: 0,
         voiceModeOn: false,
         voiceLoading: false,
         voiceStatus: undefined as string | undefined,
@@ -349,6 +355,15 @@ export class LetterFastGame extends preact.Component {
     boardTextareaRef: HTMLTextAreaElement | undefined;
 
     connectionManager: ConnectionManager | undefined;
+
+    // Returning to a backgrounded tab/app is the main way sockets die — reconnect immediately instead of waiting out the retry timer.
+    onVisibilityReconnect = () => {
+        if (document.visibilityState !== "visible") return;
+        if (!gameState.isMultiplayer) return;
+        if (!this.connectionManager) return;
+        if (gameState.connectionStatus === "connected") return;
+        void this.connectionManager.connect();
+    };
     reconnectCountdownInterval: number | undefined;
     gridSizeReactionDisposer: IReactionDisposer | undefined;
     peerFlashReactionDisposer: IReactionDisposer | undefined;
@@ -376,6 +391,20 @@ export class LetterFastGame extends preact.Component {
                 this.synced.blockedFlashCells = this.synced.blockedFlashCells.filter(c => c.id !== id);
             }, 800);
         });
+    };
+
+    flashAlreadyFoundCells = (cells: { row: number; col: number }[]) => {
+        // Amber flash on the traced cells — valid word, but it's already in
+        // the found list. Same shape as the accepted flash so it reads as
+        // "good trace", just a different color.
+        cells.forEach((cell) => {
+            const id = ++this.peerFlashIdSeq;
+            this.synced.alreadyFlashCells.push({ row: cell.row, col: cell.col, id });
+            setTimeout(() => {
+                this.synced.alreadyFlashCells = this.synced.alreadyFlashCells.filter(c => c.id !== id);
+            }, 800);
+        });
+        this.vibrate();
     };
 
     preventGlobalTouch = (e: TouchEvent) => {
@@ -476,11 +505,17 @@ export class LetterFastGame extends preact.Component {
         const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
         window.history.pushState({}, "", newUrl);
 
+        // A dead websocket fires this through rpcClient (guarded to the current instance), which schedules a reconnect; reconnecting re-joins the game and the server's join snapshot fully resyncs state, so a dropped connection can't leave a zombie game.
+        setRPCDisconnectHandler(() => {
+            this.connectionManager?.handleDisconnect();
+        });
+        document.removeEventListener("visibilitychange", this.onVisibilityReconnect);
+        document.addEventListener("visibilitychange", this.onVisibilityReconnect);
         this.connectionManager = new ConnectionManager({
             connect: async () => {
                 resetRPCClient();
                 const newRpc = getRPCClient();
-                await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration);
+                await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration, getClientId());
             },
             disconnect: () => {
                 resetRPCClient();
@@ -1444,7 +1479,7 @@ export class LetterFastGame extends preact.Component {
 
     private applyImportedBoard = async (rows: string[]): Promise<void> => {
         const width = rows[0].length;
-        const { LETTER_POINTS } = await import("./GameState");
+        const { LETTER_POINTS, ensureCellToWordsForGrid } = await import("./GameState");
         const { getWordTrie, findAllWordsInGrid, calculateTotalScoreForWords } = await import("./GridGenerator");
 
         const newGrid: GridCell[][] = rows.map(row => Array.from(row).map((letter): GridCell => ({
@@ -1455,22 +1490,13 @@ export class LetterFastGame extends preact.Component {
 
         const trie = await getWordTrie();
         const result = findAllWordsInGrid(newGrid, trie);
-        const cellToWords = new Map<string, Set<string>>();
-        for (const [word, cells] of result.wordPaths) {
-            const upperWord = word.toUpperCase();
-            for (const cellKey of cells) {
-                let wordsSet = cellToWords.get(cellKey);
-                if (!wordsSet) { wordsSet = new Set<string>(); cellToWords.set(cellKey, wordsSet); }
-                wordsSet.add(upperWord);
-            }
-        }
 
         gameState.gridWidth = width;
         gameState.gridHeight = rows.length;
         gameState.grid = newGrid;
-        gameState.cellToWords = cellToWords;
         gameState.totalPossibleWords = result.words.size;
         gameState.totalPossibleScore = calculateTotalScoreForWords(newGrid, result.words, trie);
+        await ensureCellToWordsForGrid(newGrid);
 
         gameState.status = "ready";
         gameState.score = 0;
@@ -1578,22 +1604,8 @@ export class LetterFastGame extends preact.Component {
             gameState.matchedWordsSet.clear();
             gameState.timeRemaining = challengeData.gameDuration;
 
-            const { getWordTrie, findAllWordsInGrid } = await import("./GridGenerator");
-            const trie = await getWordTrie();
-            const result = findAllWordsInGrid(challengeData.grid, trie);
-            const cellToWords = new Map<string, Set<string>>();
-            for (let [word, cells] of result.wordPaths) {
-                let upperWord = word.toUpperCase();
-                for (let cellKey of cells) {
-                    let wordsSet = cellToWords.get(cellKey);
-                    if (!wordsSet) {
-                        wordsSet = new Set<string>();
-                        cellToWords.set(cellKey, wordsSet);
-                    }
-                    wordsSet.add(upperWord);
-                }
-            }
-            gameState.cellToWords = cellToWords;
+            const { ensureCellToWordsForGrid } = await import("./GameState");
+            await ensureCellToWordsForGrid(challengeData.grid);
             return;
         }
 
@@ -2031,6 +2043,21 @@ export class LetterFastGame extends preact.Component {
         }
 
         if (gameState.isMultiplayer) {
+            if (gameState.matchedWordsSet.has(word.toUpperCase())) {
+                this.flashAlreadyFoundCells(this.synced.selectedCells.slice());
+                // Cooperative: glow the finder's segment in the score bar so it's obvious who got it first.
+                const found = gameState.matchedWords.find(w => w.word === word.toUpperCase());
+                if (typeof found?.playerIndex === "number" && found.playerIndex !== gameState.myPlayerIndex) {
+                    const token = ++this.synced.highlightPlayerToken;
+                    this.synced.highlightPlayerIndex = found.playerIndex;
+                    setTimeout(() => {
+                        if (this.synced.highlightPlayerToken === token) {
+                            this.synced.highlightPlayerIndex = undefined;
+                        }
+                    }, PLAYER_HIGHLIGHT_DURATION_MS);
+                }
+                return;
+            }
             if (!isNode() && gameState.gameId) {
                 const rpc = getRPCClient();
                 const cells = this.synced.selectedCells.slice();
@@ -2072,7 +2099,10 @@ export class LetterFastGame extends preact.Component {
         }
 
         const upperWord = word.toUpperCase();
-        if (gameState.matchedWordsSet.has(upperWord)) return;
+        if (gameState.matchedWordsSet.has(upperWord)) {
+            this.flashAlreadyFoundCells(this.synced.selectedCells.slice());
+            return;
+        }
 
         let points = calculateWordScore(this.synced.selectedCells);
         gameState.score += points;
@@ -2356,6 +2386,7 @@ export class LetterFastGame extends preact.Component {
                     const isYou = entry.originalIndex === gameState.myPlayerIndex;
                     const isHost = entry.originalIndex === 0;
                     const hue = hueFor(entry.originalIndex, isYou);
+                    const isHighlighted = entry.originalIndex === this.synced.highlightPlayerIndex;
                     return (
                         <div
                             key={entry.p.id || `idx-${entry.originalIndex}`}
@@ -2368,9 +2399,14 @@ export class LetterFastGame extends preact.Component {
                                 height: `${BAR_HEIGHT}px`,
                                 left: `${lefts[sortIdx]}%`,
                                 width: `${pcts[sortIdx]}%`,
-                                background: `linear-gradient(180deg, hsl(${hue}, 60%, 42%), hsl(${hue}, 55%, 32%))`,
-                                transition: "left 350ms ease, width 350ms ease",
-                                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.2)",
+                                background: isHighlighted
+                                    ? `linear-gradient(180deg, hsl(${hue}, 90%, 60%), hsl(${hue}, 80%, 45%))`
+                                    : `linear-gradient(180deg, hsl(${hue}, 60%, 42%), hsl(${hue}, 55%, 32%))`,
+                                transition: "left 350ms ease, width 350ms ease, background 200ms ease, box-shadow 200ms ease",
+                                boxShadow: isHighlighted
+                                    ? "0 0 0 3px rgba(255, 200, 60, 0.95), 0 0 16px rgba(255, 200, 60, 0.8)"
+                                    : "inset 0 0 0 1px rgba(0,0,0,0.2)",
+                                zIndex: isHighlighted ? 1 : undefined,
                                 textShadow: "0 1px 2px rgba(0,0,0,0.5)",
                                 whiteSpace: "nowrap",
                             }}
@@ -2508,6 +2544,7 @@ export class LetterFastGame extends preact.Component {
                                 let isPulsing = this.isCellPulsing(ri, ci);
                                 let isPeerFlashing = this.synced.peerFlashCells.some(c => c.row === ri && c.col === ci);
                                 let isBlockedFlashing = this.synced.blockedFlashCells.some(c => c.row === ri && c.col === ci);
+                                let isAlreadyFlashing = this.synced.alreadyFlashCells.some(c => c.row === ri && c.col === ci);
                                 let isExhausted = !this.isCellExhausted(ri, ci);
                                 return (
                                     <div
@@ -2573,6 +2610,18 @@ export class LetterFastGame extends preact.Component {
                                                     border: "3px solid rgba(255, 60, 60, 0.95)",
                                                     boxShadow: "0 0 12px rgba(255, 60, 60, 0.7)",
                                                     background: "transparent",
+                                                }}
+                                            />
+                                        )}
+                                        {isAlreadyFlashing && (
+                                            <div
+                                                className={css.absolute.pos(0, 0).fillBoth
+                                                    .borderRadius(8)
+                                                    + " blocked-flash-cell"}
+                                                style={{
+                                                    border: "3px solid rgba(255, 200, 60, 0.95)",
+                                                    boxShadow: "0 0 12px rgba(255, 200, 60, 0.6)",
+                                                    background: "rgba(255, 200, 60, 0.2)",
                                                 }}
                                             />
                                         )}
@@ -3136,7 +3185,7 @@ export class LetterFastGame extends preact.Component {
             return "Skipped";
         };
         return (
-            <div className={css.fontSize(20).fontWeight("bold").pad2(10, 12).borderRadius(8)
+            <div className={css.fillWidth.fontSize(20).fontWeight("bold").pad2(10, 12).borderRadius(8)
                 .hsl(240, 30, 18).colorhsl(0, 0, 100)
                 + ""}
                 style={{ border: "1px solid rgba(255,255,255,0.1)", lineHeight: "1.3" }}
@@ -3162,7 +3211,8 @@ export class LetterFastGame extends preact.Component {
     renderMatchedWords() {
         const showPrefix = gameState.gameMode === "cooperative" && gameState.isMultiplayer;
         return (
-            <div className={css.vbox(6).overflowAuto.fillBoth
+            <div className={css.hbox(10, 6).wrap.alignContent("flex-start").alignItems("flex-start")
+                .overflowAuto.fillBoth
                 .hsl(240, 30, 15).borderRadius(8).pad2(12)
                 .colorhsl(0, 0, 100)
             }>

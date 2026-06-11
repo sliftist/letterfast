@@ -1,7 +1,7 @@
 import { observable } from "mobx";
 import { isNode } from "typesafecss";
 import { getWords } from "./words";
-import { generateGameGrid } from "./GridGenerator";
+import { generateGameGrid, buildCellToWords, getWordTrie, gridLetterFingerprint } from "./GridGenerator";
 import { getSavedConfigOrDefaults } from "./GameConfig";
 import { showGameOver } from "./GameOver";
 
@@ -108,6 +108,10 @@ export type GameOverState =
 
         totalPossibleScore: number;
         totalPossibleWords: number;
+        // The word (and which player picked it) that crossed the coop goal.
+        // Only set when the game ended because the cooperative target was
+        // reached. Undefined for non-coop games, manual End Now, etc.
+        coopWinningWord?: { word: string; points: number; playerIndex: number };
     };
 
 export const LETTER_POINTS: { [key: string]: number } = {
@@ -143,12 +147,26 @@ if (!isNode()) {
     });
 }
 
+// Tracks which grid the current `gameState.cellToWords` corresponds to so we
+// don't re-scan the dictionary on every snapshot when the grid is unchanged.
+let cellToWordsFingerprint: string | undefined;
+
+export async function ensureCellToWordsForGrid(grid: GridCell[][]): Promise<void> {
+    const fp = gridLetterFingerprint(grid);
+    if (cellToWordsFingerprint === fp && gameState.cellToWords.size > 0) return;
+    const trie = await getWordTrie();
+    if (gameState.grid !== grid && gridLetterFingerprint(gameState.grid) !== fp) return;
+    gameState.cellToWords = buildCellToWords(grid, trie);
+    cellToWordsFingerprint = fp;
+}
+
 async function generateGrid(): Promise<GridCell[][]> {
     let seed = Date.now();
     let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
     gameState.totalPossibleWords = result.totalPossibleWords;
     gameState.totalPossibleScore = result.totalPossibleScore;
     gameState.cellToWords = result.cellToWords;
+    cellToWordsFingerprint = gridLetterFingerprint(result.grid);
     return result.grid;
 }
 
@@ -333,11 +351,22 @@ export async function endGame() {
             }];
         }
 
+        let coopWinningWord: GameOverState["coopWinningWord"] | undefined;
+        if (gameState.gameMode === "cooperative" && gameState.totalPossibleScore > 0) {
+            const goal = Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction));
+            if (gameState.score >= goal) {
+                const last = gameState.matchedWords[gameState.matchedWords.length - 1];
+                if (last) {
+                    coopWinningWord = { word: last.word, points: last.points, playerIndex: 0 };
+                }
+            }
+        }
         const gameOverState: GameOverState = {
             grid: gameState.grid,
             playerResults,
             totalPossibleScore: gameState.totalPossibleScore,
             totalPossibleWords: gameState.totalPossibleWords,
+            coopWinningWord,
         };
         const onPlayAgain = () => { void startGame(); };
         gameState.lastGameOverState = gameOverState;

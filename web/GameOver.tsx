@@ -119,9 +119,11 @@ class GameOverComponent extends preact.Component<GameOverProps> {
         }
         const allFoundWords = Array.from(allFoundMap.values());
         if (selfPlayer) {
+            // Cooperative: a word any teammate found is found, so missed-word analysis runs against the whole team's words, not just yours.
+            const isCoop = gameState.gameMode === "cooperative";
             const analysis = await analyzeWords({
                 grid: this.props.state.grid,
-                foundWords: selfPlayer.matchedWords,
+                foundWords: isCoop ? allFoundWords : selfPlayer.matchedWords,
                 allFoundWords,
             });
             this.synced.analysis = analysis;
@@ -244,9 +246,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                     </button>
                     {(() => {
                         const isCoopGoal = gameState.gameMode === "cooperative"
-                            && !gameState.isMultiplayer
                             && !isChallengeMode
-                            && selfPlayer !== undefined
                             && state.totalPossibleScore > 0;
                         if (!isCoopGoal) {
                             return (
@@ -255,9 +255,18 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 </div>
                             );
                         }
-                        const pct = Math.round(selfPlayer.score / state.totalPossibleScore * 100);
+                        const totalScore = state.playerResults.reduce((s, p) => s + p.score, 0);
+                        const pct = Math.round(totalScore / state.totalPossibleScore * 100);
                         const goalPct = Math.round(gameState.coopGoalFraction * 100);
                         const reachedGoal = pct >= goalPct;
+                        const winner = state.coopWinningWord;
+                        const winnerName = winner
+                            ? (winner.playerIndex === gameState.myPlayerIndex
+                                ? "You"
+                                : (gameState.isMultiplayer
+                                    ? `Player ${winner.playerIndex + 1}`
+                                    : "You"))
+                            : undefined;
                         return (
                             <div className={css.vbox(4).alignItems("center").textAlign("center")}>
                                 <div className={css.fontSize(36).fontWeight("bold")
@@ -265,9 +274,65 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                                 }>
                                     {reachedGoal ? "🎉 Win!" : "Game Over"}
                                 </div>
+                                {winner && (
+                                    <div className={css.fontSize(20).fontWeight("bold")}>
+                                        {winnerName} won with <span className={css.colorhsl(120, 70, 70) + ""}>{winner.word}</span>
+                                        {typeof winner.points === "number" && (
+                                            <span className={css.fontSize(16).opacity(0.7) + ""}> (+{winner.points})</span>
+                                        )}
+                                    </div>
+                                )}
                                 <div className={css.fontSize(20).opacity(0.85)}>
                                     Found {pct}% of {goalPct}% goal
                                 </div>
+                            </div>
+                        );
+                    })()}
+
+                    {gameState.isMultiplayer && !isChallengeMode && (() => {
+                        const countdownEnd = gameState.restartCountdownEnd;
+                        const secondsLeft = countdownEnd > 0
+                            ? Math.max(0, Math.ceil((countdownEnd - this.synced.countdownNow) / 1000))
+                            : 0;
+                        const isCountingDown = countdownEnd > 0 && secondsLeft > 0;
+                        const isHost = gameState.myPlayerIndex === 0;
+                        const disabled = !isHost || isCountingDown || this.synced.restartRequesting;
+                        const label = isCountingDown ? `New Game in ${secondsLeft}…` : "▶ New Game";
+                        return (
+                            <div className={css.vbox(6)}>
+                                <button
+                                    disabled={disabled}
+                                    onClick={async () => {
+                                        if (!gameState.gameId) return;
+                                        if (!isHost) return;
+                                        this.synced.restartRequesting = true;
+                                        try {
+                                            const rpc = getRPCClient();
+                                            await rpc.requestRestart(gameState.gameId);
+                                        } catch (error) {
+                                            console.error("Failed to request restart:", error);
+                                        } finally {
+                                            this.synced.restartRequesting = false;
+                                        }
+                                    }}
+                                    className={css.fillWidth.hbox(0).justifyContent("center").alignItems("center")
+                                        .pad2(18, 28).borderRadius(12)
+                                        .fontSize(28).fontWeight("bold")
+                                        .colorhsl(0, 0, 100)
+                                        .border("3px solid rgba(120, 255, 160, 0.9)")
+                                        + (disabled ? css.opacity(0.5).cursor("not-allowed") : css.cursor("pointer"))}
+                                    style={{
+                                        background: "linear-gradient(135deg, rgba(0,200,120,0.55), rgba(0,140,90,0.55))",
+                                        boxShadow: "0 0 24px rgba(120, 255, 160, 0.55)",
+                                    }}
+                                >
+                                    {label}
+                                </button>
+                                {!isHost && !isCountingDown && (
+                                    <div className={css.fontSize(14).textAlign("center").opacity(0.75)}>
+                                        Host has to click New Game
+                                    </div>
+                                )}
                             </div>
                         );
                     })()}
@@ -471,40 +536,14 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                         </div>
                     )}
 
-                    {gameState.isMultiplayer && !isChallengeMode ? (() => {
-                        const countdownEnd = gameState.restartCountdownEnd;
-                        const secondsLeft = countdownEnd > 0
-                            ? Math.max(0, Math.ceil((countdownEnd - this.synced.countdownNow) / 1000))
-                            : 0;
-                        const isCountingDown = countdownEnd > 0 && secondsLeft > 0;
-                        return (
-                            <div className={css.vbox(8)}>
-                                <button
-                                    disabled={isCountingDown || this.synced.restartRequesting}
-                                    onClick={async () => {
-                                        if (!gameState.gameId) return;
-                                        this.synced.restartRequesting = true;
-                                        try {
-                                            const rpc = getRPCClient();
-                                            await rpc.requestRestart(gameState.gameId);
-                                        } catch (error) {
-                                            console.error("Failed to request restart:", error);
-                                        } finally {
-                                            this.synced.restartRequesting = false;
-                                        }
-                                    }}
-                                >
-                                    {isCountingDown ? `Continuing in ${secondsLeft}…` : "Continue"}
-                                </button>
-                                <button onClick={() => {
-                                    closeAllModals();
-                                    onPlayAgain();
-                                }}>
-                                    Leave to Lobby
-                                </button>
-                            </div>
-                        );
-                    })() : (
+                    {gameState.isMultiplayer && !isChallengeMode ? (
+                        <button onClick={() => {
+                            closeAllModals();
+                            onPlayAgain();
+                        }}>
+                            Leave to Lobby
+                        </button>
+                    ) : (
                         <button
                             onClick={() => {
                                 challengeURL.reset();

@@ -7,7 +7,7 @@ const serverSideClientCache = new WeakMap();
 export function createRPC<T extends Record<string, (...args: any[]) => Promise<any>>>(handlers: T) {
     return {
         startServer: createServerRPC(handlers),
-        getClient: (url: string, clientHandlers: T): T => createClientRPC<T>(url, clientHandlers),
+        getClient: (url: string, clientHandlers: T, onDisconnect?: () => void): T => createClientRPC<T>(url, clientHandlers, onDisconnect),
         getServerSideClient: (): T => {
             const caller = getLastFunctionCaller();
             if (!caller) {

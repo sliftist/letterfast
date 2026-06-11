@@ -7,10 +7,12 @@ import { enableHotReloading } from "sliftutils/builders/hotReload";
 import { URLParam } from "sliftutils/render-utils/URLParam";
 import { Page } from "./Page";
 import { configureMobxNextFrameScheduler } from "sliftutils/render-utils/mobxTyped";
+import { installGlobalErrorHandlers } from "./ErrorToast";
 
 
 async function main() {
     if (isNode()) return;
+    installGlobalErrorHandlers();
     if (location.origin.startsWith("file:") || location.hostname === "localhost") {
         await enableHotReloading({ port: 9887 });
     }

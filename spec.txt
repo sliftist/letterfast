@@ -1,5 +1,21 @@
 
-0) Highlight when you get a word, so it feels better to get a word.
+0) Deploy to github pages instead (making cloudflare point to that)
+
+1) Save games to disk, so server can reboot without breaking games
+    - If the reboot is fast enough, which it should be, and everyone reconnects, it should be basically transparent for the server to update. 
+
+1.1) Also have the single game saved to disk so you can refresh the single-player page and it will resume the same single-player game at the same time. Of when it was last saved, and it should save every 15 seconds. 
+
+2) versioning of the client so when the server updates, everyone's pages are forced to refresh. Which should again just resume their multiplayer game / single player game 
+
+3) Have the server automatically watch the Git repo and update and restart when it changes. 
+
+4) Support users giving feedback and then allow viewing feedback with some kind of password (We can store the hash of the password in the repo. It's fine. It'll just be some long sequence of words, so guessing it will be impossible).
+
+5) Saving history of boards you can go to previous boards so you can share it with people. Also, make sure sharing works correctly. 
+
+
+
 
 1) FIX board importing from url not working (It seems to clobber the url and reset the board to something else)
 

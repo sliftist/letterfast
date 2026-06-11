@@ -1,5 +1,5 @@
 import { createRPC } from "./rpc/createRPC";
-import { GridCell, gameState, GameOverState, regenerateGridForCurrentSize } from "./GameState";
+import { GridCell, gameState, GameOverState, regenerateGridForCurrentSize, ensureCellToWordsForGrid } from "./GameState";
 import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
@@ -15,6 +15,14 @@ const RESTART_COUNTDOWN_MS = 10000;
 
 const pendingRestarts = new Map<string, number>();
 let peerFlashCounter = 0;
+
+const MAX_CLIENT_ID_LENGTH = 64;
+function sanitizeClientId(clientId: string | undefined): string {
+    if (typeof clientId !== "string") return "";
+    const trimmed = clientId.trim().slice(0, MAX_CLIENT_ID_LENGTH);
+    // Only allow url-safe chars; anything else is silently dropped.
+    return /^[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : "";
+}
 
 async function broadcastSnapshot(gameId: string): Promise<void> {
     await GameManager.broadcastToGame(gameId, async (client, playerIndex) => {
@@ -122,24 +130,25 @@ function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentif
     });
 }
 const serverHandlers = {
-    async createGame(playerCount: number): Promise<{ gameId: string }> {
+    async createGame(playerCount: number, clientId?: string): Promise<{ gameId: string }> {
         const player = getServerSideClient();
         if (!player) {
             throw new Error(`No active caller`);
         }
 
-        const result = await GameManager.createGame(playerCount, player);
+        const safeClientId = sanitizeClientId(clientId);
+        const result = await GameManager.createGame(playerCount, player, safeClientId);
         setupPlayerDisconnect(result.gameId, player);
 
         const players = GameManager.getPlayerScores(result.gameId);
-        // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update. 
+        // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update.
         setImmediate(() => {
             void player.onPlayerUpdate(result.gameId, players, "waiting", 0);
         });
         return result;
     },
 
-    async joinGame(gameId: string, defaultGridWidth?: number, defaultGridHeight?: number, defaultGameDuration?: number): Promise<void> {
+    async joinGame(gameId: string, defaultGridWidth?: number, defaultGridHeight?: number, defaultGameDuration?: number, clientId?: string): Promise<void> {
         const player = getServerSideClient();
         if (!player) {
             throw new Error(`No active caller`);
@@ -168,12 +177,13 @@ const serverHandlers = {
             gameDuration = defaultGameDuration;
         }
 
+        const safeClientId = sanitizeClientId(clientId);
         let game = GameManager.getGame(sanitized);
         if (!game) {
-            await GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration);
+            await GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration, false, false, safeClientId);
             game = GameManager.getGame(sanitized);
         } else {
-            GameManager.joinGame(sanitized, player);
+            GameManager.joinGame(sanitized, player, safeClientId);
         }
 
         setupPlayerDisconnect(sanitized, player);
@@ -258,8 +268,13 @@ const serverHandlers = {
             if (totalScore >= goal && game.status === "playing") {
                 const allWords = GameManager.getAllWords(gameId);
                 const playersForEnd = GameManager.getPlayerScores(gameId);
+                const winning = {
+                    word: word.toUpperCase(),
+                    points: result.points,
+                    playerIndex: submitterIndex,
+                };
                 void GameManager.broadcastToGame(gameId, async (client) => {
-                    await client.onGameEnd(gameId, playersForEnd, allWords);
+                    await client.onGameEnd(gameId, playersForEnd, allWords, winning);
                 });
                 setTimeout(() => GameManager.endGame(gameId), 1000);
             }
@@ -277,8 +292,8 @@ const serverHandlers = {
         if (!game) {
             throw new Error(`Game ${gameId} not found`);
         }
-        if (!game.players.includes(player)) {
-            throw new Error(`Player is not in game ${gameId}`);
+        if (game.players[0] !== player) {
+            throw new Error(`Only the host can start a new game`);
         }
         if (game.status !== "finished") return;
         scheduleRestart(gameId);
@@ -366,6 +381,10 @@ export const clientHandlers = {
     async onGameState(snapshot: GameManager.GameSnapshot): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== snapshot.gameId) return;
+        if (snapshot.status === "playing" && gameState.status !== "playing") {
+            // Resync (e.g. after a reconnect) into a running game — a stale game-over modal would otherwise sit on top of a playing board with nothing left to close it.
+            closeGameOverModal();
+        }
         gameState.players = snapshot.players;
         gameState.status = snapshot.status as any;
         gameState.startTime = snapshot.startTime;
@@ -388,6 +407,7 @@ export const clientHandlers = {
         gameState.totalPossibleScore = snapshot.totalPossibleScore;
         if (snapshot.grid && snapshot.grid.length > 0) {
             gameState.grid = snapshot.grid;
+            void ensureCellToWordsForGrid(snapshot.grid);
         }
         if (snapshot.yourPlayerIndex >= 0 && snapshot.players[snapshot.yourPlayerIndex]) {
             gameState.score = snapshot.players[snapshot.yourPlayerIndex].score;
@@ -417,6 +437,7 @@ export const clientHandlers = {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.grid = grid;
+        void ensureCellToWordsForGrid(grid);
         gameState.gameDuration = duration;
         gameState.startTime = startTime;
         gameState.timeRemaining = Math.max(0, duration - (Date.now() - startTime));
@@ -436,7 +457,7 @@ export const clientHandlers = {
         pageURL.value = "game";
     },
 
-    async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {
+    async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>, coopWinningWord?: { word: string; points: number; playerIndex: number }): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.status = "finished";
@@ -466,6 +487,7 @@ export const clientHandlers = {
             })),
             totalPossibleScore: gameState.totalPossibleScore,
             totalPossibleWords: gameState.totalPossibleWords,
+            coopWinningWord,
         };
         const onPlayAgain = () => { pageURL.value = "lobby"; };
         gameState.lastGameOverState = gameOverState;
@@ -553,7 +575,7 @@ const clientHandlersNoOp: ClientHandlers = {
     async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {
     },
 
-    async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>): Promise<void> {
+    async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>, coopWinningWord?: { word: string; points: number; playerIndex: number }): Promise<void> {
     },
 
     async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number): Promise<void> {

@@ -9,10 +9,14 @@ interface Game {
     id: string;
     playerCount: number;
     players: PlayerIdentifier[];
+    // Client-generated stable IDs, parallel to `players`. When a client
+    // reconnects with the same id, the slot (and its score/words/letter) is
+    // restored. Empty string when the client didn't provide one.
+    clientIds: string[];
     status: "waiting" | "playing" | "finished";
     grid: GridCell[][];
     scores: Map<PlayerIdentifier, number>;
-    words: Map<PlayerIdentifier, { word: string; points: number; cells: { row: number; col: number }[] }[]>;
+    words: Map<PlayerIdentifier, { word: string; points: number; cells: { row: number; col: number }[]; at: number }[]>;
     startTime?: number;
     endTime?: number;
     gameDuration: number;
@@ -27,7 +31,19 @@ interface Game {
     gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     timerSeqNum: number;
+    // Players who disconnected mid-game. They stay in `players` (removing them would delete their words/score and shift every later player's index); they're actually pruned when the next game starts.
+    disconnectedPlayers: Set<PlayerIdentifier>;
+    // Timestamp when the game became fully empty (every slot disconnected).
+    // Cleared when any slot becomes connected. Used by cleanupIdleGames to
+    // keep an empty game alive for a grace period so a single player can
+    // refresh and rejoin the same game they were in.
+    emptiedAt?: number;
 }
+
+// Empty games carry no runtime cost (no per-game tick, just a few KB of
+// state in the games Map), so we keep them around for a week — long enough
+// that a player who closed the tab can still rejoin days later.
+const EMPTY_GAME_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface GameSnapshot {
     gameId: string;
@@ -64,7 +80,7 @@ function generateGameId(): string {
     return id;
 }
 
-export async function createGame(playerCount: number, player: PlayerIdentifier): Promise<{ gameId: string }> {
+export async function createGame(playerCount: number, player: PlayerIdentifier, clientId = ""): Promise<{ gameId: string }> {
     const gameId = generateGameId();
     const now = Date.now();
     const gridMetadata = await generateGameGrid(now, 4, 4);
@@ -73,6 +89,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
         id: gameId,
         playerCount: 16,
         players: [player],
+        clientIds: [clientId],
         status: "waiting",
         grid: gridMetadata.grid,
         scores: new Map([[player, 0]]),
@@ -91,6 +108,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
+        disconnectedPlayers: new Set(),
     };
 
     games.set(gameId, game);
@@ -98,7 +116,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier):
     return { gameId };
 }
 
-export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell = false, showTotalPossibleScore = false): Promise<void> {
+export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell = false, showTotalPossibleScore = false, clientId = ""): Promise<void> {
     const now = Date.now();
     const gridMetadata = await generateGameGrid(now, gridWidth, gridHeight);
 
@@ -106,6 +124,7 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         id: gameId,
         playerCount,
         players: [player],
+        clientIds: [clientId],
         status: "waiting",
         grid: gridMetadata.grid,
         scores: new Map([[player, 0]]),
@@ -124,32 +143,75 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
+        disconnectedPlayers: new Set(),
     };
 
     games.set(gameId, game);
 }
 
-export function joinGame(gameId: string, player: PlayerIdentifier): void {
+export function joinGame(gameId: string, player: PlayerIdentifier, clientId = ""): void {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
+    }
+
+    // Clientid rejoin: if this client already had a slot in the game, restore
+    // it (replacing the old, now-dead handle). Score, words, and letter
+    // index all stay the same.
+    if (clientId) {
+        const existingIdx = game.clientIds.indexOf(clientId);
+        if (existingIdx !== -1) {
+            const oldPlayer = game.players[existingIdx];
+            if (oldPlayer !== player) {
+                const prevScore = game.scores.get(oldPlayer) ?? 0;
+                const prevWords = game.words.get(oldPlayer) ?? [];
+                game.scores.delete(oldPlayer);
+                game.words.delete(oldPlayer);
+                game.scores.set(player, prevScore);
+                game.words.set(player, prevWords);
+                game.players[existingIdx] = player;
+                game.disconnectedPlayers.delete(oldPlayer);
+            }
+            game.disconnectedPlayers.delete(player);
+            game.emptiedAt = undefined;
+            game.lastActivityTime = Date.now();
+            return;
+        }
+    }
+
+    game.disconnectedPlayers.delete(player);
+    if (game.players.includes(player)) {
+        game.emptiedAt = undefined;
+        game.lastActivityTime = Date.now();
+        return;
     }
     if (game.players.length >= game.playerCount) {
         throw new Error(`Game ${gameId} is full`);
     }
 
-    if (game.players.length === 0) {
+    // A brand-new joiner (no clientId match) walking into a game where every
+    // slot is disconnected gets a fresh game — they shouldn't be stuck
+    // behind ghost slots they can't act for. The original players have
+    // already had their grace window to refresh.
+    const allDisconnected = game.players.length > 0
+        && game.players.every(p => game.disconnectedPlayers.has(p));
+    if (game.players.length === 0 || allDisconnected) {
+        game.players = [];
+        game.clientIds = [];
+        game.scores.clear();
+        game.words.clear();
+        game.disconnectedPlayers.clear();
         game.status = "waiting";
         game.startTime = undefined;
         game.endTime = undefined;
-        game.scores.clear();
-        game.words.clear();
         game.timerSeqNum++;
     }
 
     game.players.push(player);
+    game.clientIds.push(clientId);
     game.scores.set(player, 0);
     game.words.set(player, []);
+    game.emptiedAt = undefined;
     game.lastActivityTime = Date.now();
 }
 
@@ -184,6 +246,17 @@ export async function startGamePlaying(gameId: string): Promise<number> {
     game.lastActivityTime = now;
     game.timerSeqNum++;
 
+    for (const player of [...game.disconnectedPlayers]) {
+        const idx = game.players.indexOf(player);
+        if (idx !== -1) {
+            game.players.splice(idx, 1);
+            game.clientIds.splice(idx, 1);
+        }
+        game.scores.delete(player);
+        game.words.delete(player);
+    }
+    game.disconnectedPlayers.clear();
+
     for (const player of game.players) {
         game.scores.set(player, 0);
         game.words.set(player, []);
@@ -201,10 +274,14 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
     }));
     const coopMatchedWords: { word: string; points: number; playerIndex: number }[] = [];
     if (game.gameMode === "cooperative") {
+        // Interlace all players' words chronologically — concatenating per player would make the client's matched-words list show blocks per player instead of most-recent-last.
+        const all: { word: string; points: number; playerIndex: number; at: number }[] = [];
         game.players.forEach((p, idx) => {
             const ws = game.words.get(p) || [];
-            for (const w of ws) coopMatchedWords.push({ word: w.word, points: w.points, playerIndex: idx });
+            for (const w of ws) all.push({ word: w.word, points: w.points, playerIndex: idx, at: w.at || 0 });
         });
+        all.sort((a, b) => a.at - b.at);
+        for (const w of all) coopMatchedWords.push({ word: w.word, points: w.points, playerIndex: w.playerIndex });
     }
     return {
         gameId: game.id,
@@ -306,7 +383,7 @@ export async function submitWord(config: {
     const currentScore = game.scores.get(config.player) || 0;
     game.scores.set(config.player, currentScore + points);
 
-    playerWords.push({ word: config.word.toUpperCase(), points, cells: config.cells });
+    playerWords.push({ word: config.word.toUpperCase(), points, cells: config.cells, at: Date.now() });
     game.words.set(config.player, playerWords);
 
     return { points };
@@ -347,12 +424,40 @@ export function removePlayerFromGame(gameId: string, player: PlayerIdentifier): 
     if (!game) return;
 
     const playerIndex = game.players.indexOf(player);
-    if (playerIndex !== -1) {
+    if (playerIndex === -1) return;
+
+    // Decide whether to preserve the slot (so the client can refresh and
+    // rejoin via clientId) or evict it.
+    // - "playing":   always preserve. Removing them mid-game would shift
+    //                every later player's letter and corrupt the coop word
+    //                list. The slot is pruned on the next startGamePlaying.
+    // - "finished":  always preserve. The user may want to Continue or
+    //                Restart, and other players' scoreboards reference
+    //                their slot.
+    // - "waiting":   preserve only if they're the *last* player in the game,
+    //                so a solo creator who refreshes doesn't lose their
+    //                game. Otherwise (other lobby members), evict so the
+    //                lobby's player count drops immediately.
+    const isLastPlayer = game.players.length === 1;
+    const preserveSlot = game.status !== "waiting" || isLastPlayer;
+
+    if (preserveSlot) {
+        game.disconnectedPlayers.add(player);
+    } else {
         game.players.splice(playerIndex, 1);
+        game.clientIds.splice(playerIndex, 1);
+        game.scores.delete(player);
+        game.words.delete(player);
+        game.disconnectedPlayers.delete(player);
     }
 
-    game.scores.delete(player);
-    game.words.delete(player);
+    // If every remaining slot is disconnected, start the empty-game grace
+    // timer. cleanupIdleGames deletes the game once it stays empty long
+    // enough.
+    const anyConnected = game.players.some(p => !game.disconnectedPlayers.has(p));
+    if (!anyConnected && game.emptiedAt === undefined) {
+        game.emptiedAt = Date.now();
+    }
 }
 
 const BROADCAST_TIMEOUT_MS = 15000;
@@ -379,8 +484,13 @@ export async function broadcastToGame(gameId: string, callback: (client: ClientH
         }
     }));
 
-    const anySucceeded = results.some(r => r);
-    if (!anySucceeded && games.get(gameId) === game) {
+    // Only auto-delete the game when every CONNECTED player's broadcast
+    // failed — if all the listed slots are intentionally disconnected
+    // (everyone closed the tab), let the empty-game grace timer handle
+    // cleanup so a refresh can still rejoin.
+    const connectedResults = results.filter((_, i) => !game.disconnectedPlayers.has(players[i]));
+    const anySucceeded = connectedResults.some(r => r);
+    if (connectedResults.length > 0 && !anySucceeded && games.get(gameId) === game) {
         console.warn(`All broadcasts failed for game ${gameId}, removing game`);
         games.delete(gameId);
     }
@@ -466,18 +576,19 @@ export function getGameSettings(gameId: string): { gridWidth: number; gridHeight
 
 export function cleanupIdleGames(): void {
     const now = Date.now();
-    const thirtyMinutes = 30 * 60 * 1000;
     const oneWeek = 7 * 24 * 60 * 60 * 1000;
 
     for (const [gameId, game] of games.entries()) {
-        if (game.players.length === 0) {
-            if (now - game.createdTime > thirtyMinutes) {
+        if (game.emptiedAt !== undefined) {
+            if (now - game.emptiedAt > EMPTY_GAME_GRACE_MS) {
                 games.delete(gameId);
             }
-        } else {
-            if (now - game.lastActivityTime > oneWeek) {
-                games.delete(gameId);
-            }
+        } else if (game.players.length === 0) {
+            // Defensive: shouldn't normally hit this since emptiedAt is set
+            // alongside the last disconnect, but evict immediately if we do.
+            games.delete(gameId);
+        } else if (now - game.lastActivityTime > oneWeek) {
+            games.delete(gameId);
         }
     }
 }

@@ -96,6 +96,10 @@ async function fetchWordsFromGeneratedJS(): Promise<string[]> {
     return new Promise((resolve, reject) => {
         const script = document.createElement("script");
         script.src = "./words.generated.js";
+        // Needed so cross-origin runtime errors keep their .message / .stack
+        // instead of getting sanitized down to "Script error." in our global
+        // window.onerror handler.
+        script.crossOrigin = "anonymous";
         script.onload = () => {
             const base64Data = (window as any).__LETTERFAST_WORDS__;
             if (!base64Data) {

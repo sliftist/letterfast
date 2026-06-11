@@ -78,6 +78,36 @@ export async function getWordTrie(): Promise<Trie> {
     return wordTrie;
 }
 
+// Builds the per-cell word index used by `remainingWordsForCell` and the
+// "exhausted cell" check. Centralized so every caller (grid generation,
+// board import, challenge mode, multiplayer grid arrival) uses the exact
+// same logic and the index stays in sync with the live grid.
+export function buildCellToWords(grid: GridCell[][], trie: Trie): Map<string, Set<string>> {
+    const cellToWords = new Map<string, Set<string>>();
+    const result = findAllWordsInGrid(grid, trie);
+    for (const [word, cells] of result.wordPaths) {
+        const upperWord = word.toUpperCase();
+        for (const cellKey of cells) {
+            let wordsSet = cellToWords.get(cellKey);
+            if (!wordsSet) { wordsSet = new Set<string>(); cellToWords.set(cellKey, wordsSet); }
+            wordsSet.add(upperWord);
+        }
+    }
+    return cellToWords;
+}
+
+export function gridLetterFingerprint(grid: GridCell[][]): string {
+    let out = "";
+    for (let r = 0; r < grid.length; r++) {
+        const row = grid[r];
+        for (let c = 0; c < row.length; c++) {
+            out += row[c].letter;
+        }
+        out += "|";
+    }
+    return out;
+}
+
 export function findPathsForWord(grid: GridCell[][], target: string): { row: number; col: number }[][] {
     const upper = target.toUpperCase();
     if (upper.length === 0) return [];
