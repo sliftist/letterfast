@@ -612,6 +612,17 @@ export type AllHandlers = typeof allHandlers;
 
 export const { startServer, getClient, getServerSideClient } = createRPC(allHandlers);
 
+// Called by server.ts on boot with the rows loaded from SQLite. Re-arms the end timers for competitive games that were mid-play when the server went down (setTimeout state doesn't survive a restart).
+export function restorePersistedGames(rows: { id: string; data: string }[]): void {
+    const timers = GameManager.restoreSerializedGames(rows);
+    for (const t of timers) {
+        scheduleGameEnd(t.gameId, t.remainingMs, t.timerSeqNum);
+    }
+    if (rows.length > 0) {
+        console.log(`Restored ${rows.length} persisted games (${timers.length} with active end timers)`);
+    }
+}
+
 GameManager.startCleanupInterval();
 
 function cleanupExpiredChallenges(): void {

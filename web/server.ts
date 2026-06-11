@@ -1,4 +1,6 @@
-import { startServer } from "./multiplayerFunctionHandlers";
+import { startServer, restorePersistedGames } from "./multiplayerFunctionHandlers";
+import { serializeAllGames } from "./GameManager";
+import { openGameDb, loadAllGames, flushGames } from "./gamePersistence";
 import { loadOrGenerateCert, startCertMaintenance, ensureARecord } from "./certManager";
 import * as fs from "fs";
 import * as http from "http";
@@ -203,8 +205,34 @@ function startStaticServer(): void {
 const CERT_DOMAIN = "letterquick.com";
 const MULTIPLAYER_HOST = "multiplayer.letterquick.com";
 const RPC_PORT = 8880;
+const GAMES_DB_PATH = "games.db";
+// Dirty games are written at most this often, so gameplay doesn't hammer the disk.
+const GAME_FLUSH_INTERVAL = 10 * 1000;
+
+function flushGamesNow(context: string): void {
+    try {
+        flushGames(serializeAllGames());
+    } catch (err) {
+        console.error(`Game persistence flush failed (${context}):`, (err as Error).stack ?? err);
+    }
+}
+
+function setupGamePersistence(): void {
+    openGameDb(GAMES_DB_PATH);
+    restorePersistedGames(loadAllGames());
+    setInterval(() => flushGamesNow("interval"), GAME_FLUSH_INTERVAL);
+    // systemd sends SIGTERM on restart/stop — flush synchronously so an in-flight deploy can't lose games. SIGINT covers Ctrl+C in dev.
+    for (const signal of ["SIGTERM", "SIGINT"] as const) {
+        process.on(signal, () => {
+            console.log(`${signal} received, flushing games before exit`);
+            flushGamesNow(signal);
+            process.exit(0);
+        });
+    }
+}
 
 async function main() {
+    setupGamePersistence();
     // The Cloudflare token (used for both the DNS-01 cert challenge and the A-record upkeep) is read by sliftutils from ./cloudflare.json. Without it we're in local dev — plain ws is fine there.
     if (fs.existsSync("cloudflare.json")) {
         const keyCert = await loadOrGenerateCert(CERT_DOMAIN);

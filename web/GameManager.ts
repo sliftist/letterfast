@@ -70,6 +70,122 @@ export interface GameSnapshot {
 
 const games = new Map<string, Game>();
 
+// Plain-JSON shape of a Game for SQLite persistence. Live RPC handles can't be serialized, so scores/words are stored by player index and players are restored as disconnected stubs — the clientId rejoin path swaps the real handle back into the slot when the player reconnects.
+interface SerializedGame {
+    id: string;
+    playerCount: number;
+    clientIds: string[];
+    status: "waiting" | "playing" | "finished";
+    grid: GridCell[][];
+    scores: number[];
+    words: { word: string; points: number; cells: { row: number; col: number }[]; at: number }[][];
+    startTime?: number;
+    endTime?: number;
+    gameDuration: number;
+    gridWidth: number;
+    gridHeight: number;
+    createdTime: number;
+    lastActivityTime: number;
+    totalPossibleWords: number;
+    totalPossibleScore: number;
+    showRemainingWordsPerCell: boolean;
+    showTotalPossibleScore: boolean;
+    gameMode: "competitive" | "cooperative" | "competitive-shared";
+    coopGoalFraction: number;
+    timerSeqNum: number;
+    emptiedAt?: number;
+}
+
+function makeOfflinePlayerStub(): PlayerIdentifier {
+    // Quiet no-op for every RPC method — restored players are disconnected until they rejoin, and broadcasts to them should neither throw nor log.
+    return new Proxy({}, { get: () => async () => undefined }) as unknown as PlayerIdentifier;
+}
+
+export function serializeAllGames(): { id: string; data: string }[] {
+    const out: { id: string; data: string }[] = [];
+    for (const game of games.values()) {
+        const s: SerializedGame = {
+            id: game.id,
+            playerCount: game.playerCount,
+            clientIds: game.clientIds,
+            status: game.status,
+            grid: game.grid,
+            scores: game.players.map(p => game.scores.get(p) || 0),
+            words: game.players.map(p => game.words.get(p) || []),
+            startTime: game.startTime,
+            endTime: game.endTime,
+            gameDuration: game.gameDuration,
+            gridWidth: game.gridWidth,
+            gridHeight: game.gridHeight,
+            createdTime: game.createdTime,
+            lastActivityTime: game.lastActivityTime,
+            totalPossibleWords: game.totalPossibleWords,
+            totalPossibleScore: game.totalPossibleScore,
+            showRemainingWordsPerCell: game.showRemainingWordsPerCell,
+            showTotalPossibleScore: game.showTotalPossibleScore,
+            gameMode: game.gameMode,
+            coopGoalFraction: game.coopGoalFraction,
+            timerSeqNum: game.timerSeqNum,
+            emptiedAt: game.emptiedAt,
+        };
+        out.push({ id: game.id, data: JSON.stringify(s) });
+    }
+    return out;
+}
+
+// Returns the competitive games still mid-play whose end timers must be re-armed by the caller (timers don't survive a restart).
+export function restoreSerializedGames(rows: { id: string; data: string }[]): { gameId: string; remainingMs: number; timerSeqNum: number }[] {
+    const timers: { gameId: string; remainingMs: number; timerSeqNum: number }[] = [];
+    const now = Date.now();
+    for (const row of rows) {
+        let s: SerializedGame;
+        try {
+            s = JSON.parse(row.data) as SerializedGame;
+        } catch (err) {
+            console.error(`Failed to parse persisted game ${row.id}, skipping:`, (err as Error).stack ?? err);
+            continue;
+        }
+        const players = s.clientIds.map(() => makeOfflinePlayerStub());
+        const game: Game = {
+            id: s.id,
+            playerCount: s.playerCount,
+            players,
+            clientIds: s.clientIds,
+            status: s.status,
+            grid: s.grid,
+            scores: new Map(players.map((p, i) => [p, s.scores[i] || 0])),
+            words: new Map(players.map((p, i) => [p, s.words[i] || []])),
+            startTime: s.startTime,
+            endTime: s.endTime,
+            gameDuration: s.gameDuration,
+            gridWidth: s.gridWidth,
+            gridHeight: s.gridHeight,
+            createdTime: s.createdTime,
+            lastActivityTime: s.lastActivityTime,
+            totalPossibleWords: s.totalPossibleWords,
+            totalPossibleScore: s.totalPossibleScore,
+            showRemainingWordsPerCell: s.showRemainingWordsPerCell,
+            showTotalPossibleScore: s.showTotalPossibleScore,
+            gameMode: s.gameMode,
+            coopGoalFraction: s.coopGoalFraction,
+            timerSeqNum: s.timerSeqNum,
+            disconnectedPlayers: new Set(players),
+            // Everyone is disconnected after a restart; keep the original empty-timestamp if the game was already empty, otherwise the grace window starts now.
+            emptiedAt: s.emptiedAt ?? now,
+        };
+        if (game.status === "playing" && game.gameMode !== "cooperative") {
+            if (game.endTime && game.endTime > now) {
+                timers.push({ gameId: game.id, remainingMs: game.endTime - now, timerSeqNum: game.timerSeqNum });
+            } else {
+                // The game ended while the server was down (or has no end time to honor) — finish it so rejoiners see the end state instead of a frozen board.
+                game.status = "finished";
+            }
+        }
+        games.set(game.id, game);
+    }
+    return timers;
+}
+
 function generateGameId(): string {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let id: string;
