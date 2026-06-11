@@ -193,14 +193,20 @@ const serverHandlers = {
             let gameT = game;
             // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update.
             setImmediate(() => {
-                void GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
-                    await playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
-                });
-                void broadcastSnapshot(sanitized);
-
-                if (gameT.status === "playing" && gameT.startTime) {
-                    void player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
-                }
+                void (async () => {
+                    // Send order matters for reconnects: onGameStart resets the client's score/words (correct for a fresh game), so the snapshot must be LAST — it's the authoritative resync that restores score, grid, seat, and word lists after a rejoin mid-game.
+                    if (gameT.status === "playing" && gameT.startTime) {
+                        try {
+                            await player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
+                        } catch (err) {
+                            console.error(`onGameStart to rejoining player failed:`, (err as Error).stack ?? err);
+                        }
+                    }
+                    await GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
+                        await playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
+                    });
+                    await broadcastSnapshot(sanitized);
+                })();
             });
         }
     },
@@ -419,6 +425,10 @@ export const clientHandlers = {
                 playerIndex: w.playerIndex,
             }));
             gameState.matchedWordsSet = new Set(snapshot.coopMatchedWords.map(w => w.word));
+        } else if (gameState.matchedWords.length === 0 && snapshot.yourWords && snapshot.yourWords.length > 0) {
+            // Competitive reconnect: restore the player's own word list from the server. Only when the local list is empty (fresh rejoin) — mid-game snapshots must not clobber local-only entries like competitive-shared "blocked" strikethroughs.
+            gameState.matchedWords = snapshot.yourWords.map(w => ({ word: w.word, points: w.points }));
+            gameState.matchedWordsSet = new Set(snapshot.yourWords.map(w => w.word.toUpperCase()));
         }
     },
 

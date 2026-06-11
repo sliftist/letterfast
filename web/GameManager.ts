@@ -63,6 +63,8 @@ export interface GameSnapshot {
     grid: GridCell[][];
     startTime: number | undefined;
     coopMatchedWords: { word: string; points: number; playerIndex: number }[];
+    // The receiving player's own accepted words, in every mode — lets a reconnecting client restore its found-word list (coopMatchedWords only covers cooperative).
+    yourWords: { word: string; points: number }[];
     timerSeqNum: number;
 }
 
@@ -283,6 +285,7 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
         all.sort((a, b) => a.at - b.at);
         for (const w of all) coopMatchedWords.push({ word: w.word, points: w.points, playerIndex: w.playerIndex });
     }
+    const yourWords = (game.words.get(player) || []).map(w => ({ word: w.word, points: w.points }));
     return {
         gameId: game.id,
         status: game.status,
@@ -301,6 +304,7 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
         grid: game.grid,
         startTime: game.startTime,
         coopMatchedWords,
+        yourWords,
         timerSeqNum: game.timerSeqNum,
     };
 }
