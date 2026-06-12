@@ -9,7 +9,6 @@ import { ErrorToast } from "./ErrorToast";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
-export const boardURL = new URLParam("board", "");
 export const challengeURL = new URLParam<{
     grid: GridCell[][];
     challengerWords: { word: string; points: number }[];

@@ -4,6 +4,7 @@ import { getWords } from "./words";
 import { generateGameGrid, buildCellToWords, getWordTrie, gridLetterFingerprint } from "./GridGenerator";
 import { getSavedConfigOrDefaults } from "./GameConfig";
 import { showGameOver } from "./GameOver";
+import { updateSingleGameURL, singleGameURL } from "./singlePlayerGames";
 
 
 export const CELL_SIZE = 80;
@@ -232,9 +233,11 @@ export function applySettings(settings: {
 }
 
 void generateGrid().then(grid => {
-    if (!gameState.isChallengeMode) {
-        gameState.grid = grid;
-    }
+    if (gameState.isChallengeMode) return;
+    // A shared/restored game in the URL owns the board — the component applies it on mount; don't race it with a random initial grid.
+    if (!isNode() && singleGameURL.value) return;
+    gameState.grid = grid;
+    updateSingleGameURL();
 });
 
 function tickTimer() {
@@ -269,6 +272,7 @@ export async function startGame(regenerateGrid = true, duration?: number) {
         gameState.grid = await generateGrid();
         gameState.isChallengeMode = false;
         gameState.challengerData = undefined;
+        updateSingleGameURL();
     }
     gameState.timeRemaining = gameState.gameDuration;
     gameState.elapsedTime = 0;
@@ -390,6 +394,7 @@ export async function changeGridSize(config: { width: number; height: number }) 
     gameState.matchedWords = [];
     gameState.matchedWordsSet.clear();
     gameState.timeRemaining = gameState.gameDuration;
+    updateSingleGameURL();
 }
 
 export async function regenerateGridForCurrentSize(): Promise<void> {

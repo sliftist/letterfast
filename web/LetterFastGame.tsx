@@ -3,7 +3,8 @@ import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { joinGameIdURL, challengeURL, boardURL } from "./Page";
+import { joinGameIdURL, challengeURL } from "./Page";
+import { singleGameURL, encodeSingleGameId, decodeSingleGameId, applySingleGameFromURL, updateSingleGameURL } from "./singlePlayerGames";
 import {
     CELL_SIZE,
     CELL_GAP,
@@ -26,6 +27,7 @@ import {
     applySettings,
     DEFAULT_GAME_MODE,
     DEFAULT_COOP_GOAL_FRACTION,
+    LETTER_POINTS,
 } from "./GameState";
 import { findPathsForWord, findAllWordsInGrid, getWordTrie } from "./GridGenerator";
 import { getClientId } from "./ClientId";
@@ -502,6 +504,8 @@ export class LetterFastGame extends preact.Component {
         gameState.isMultiplayer = true;
         gameState.gameId = code;
         joinGameIdURL.value = code;
+        // A multiplayer game owns the board now — drop any single-player game id so a refresh rejoins the multiplayer game instead of restoring the old solo board.
+        singleGameURL.reset();
         const newUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
         window.history.pushState({}, "", newUrl);
 
@@ -1392,26 +1396,34 @@ export class LetterFastGame extends preact.Component {
         return grid.map(row => row.map(c => (c.letter || "").toUpperCase()).join("")).join("\n");
     };
 
-    /** Encode a board's letters for a URL: rows joined by "-". E.g.
-     *  "ABCD-EFGH-IJKL-MNOP". Short, human-readable, and a valid URL
-     *  query value without escaping. */
-    private gridToUrlEncoded = (grid: GridCell[][]): string => {
-        return grid.map(row => row.map(c => (c.letter || "").toUpperCase()).join("")).join("-");
-    };
-
     private buildBoardShareUrl = (grid: GridCell[][]): string => {
         if (typeof window === "undefined") return "";
-        const code = this.gridToUrlEncoded(grid);
-        return `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&board=${code}`;
+        const id = encodeSingleGameId({
+            grid,
+            gameDuration: gameState.gameDuration,
+            gameMode: gameState.gameMode,
+            coopGoalFraction: gameState.coopGoalFraction,
+        });
+        return `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&g=${id}`;
     };
 
     /** Parse rows of letters out of arbitrary input — accepts:
      *    - the raw multi-line letter grid (one row per line),
-     *    - a "board=ABCD-EFGH-…" URL-encoded value,
-     *    - a full URL containing `?board=ABCD-EFGH-…` or `&board=…`.
+     *    - rows joined by "-" ("ABCD-EFGH-…"),
+     *    - a full share URL containing `?g=<encoded game id>` (also the
+     *      legacy `?board=ABCD-EFGH-…` format).
      *  Returns the parsed rows, or an error string for the user. */
     private parseBoardInput = (raw: string): { rows: string[] } | { error: string } => {
         let text = (raw || "").trim();
+        // A share-link id encodes the whole board — extract the letters from it.
+        const gameIdMatch = /[?&]g=([^&\s#]+)/i.exec(text);
+        if (gameIdMatch) {
+            const config = decodeSingleGameId(decodeURIComponent(gameIdMatch[1]));
+            if (!config) {
+                return { error: "Could not decode the game id in that URL." };
+            }
+            return { rows: config.grid.map(row => row.map(c => c.letter).join("")) };
+        }
         // Pull a board= param out of a URL-shaped input. Match `board=`
         // followed by the value up to the next `&` or end of string.
         const urlMatch = /[?&]board=([^&\s#]+)/i.exec(text);
@@ -1450,9 +1462,13 @@ export class LetterFastGame extends preact.Component {
         }
         let url: string;
         if (parsed && "rows" in parsed) {
-            // Re-encode whatever's in the textarea.
-            const encoded = parsed.rows.join("-");
-            url = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&board=${encoded}`;
+            // Re-encode whatever's in the textarea as a shareable game id (multiplier-less board, current duration/mode settings).
+            const grid: GridCell[][] = parsed.rows.map(row => Array.from(row).map((letter): GridCell => ({
+                letter,
+                points: LETTER_POINTS[letter] || 1,
+                multiplier: 1,
+            })));
+            url = this.buildBoardShareUrl(grid);
         } else {
             url = this.buildBoardShareUrl(gameState.grid);
         }
@@ -1508,6 +1524,7 @@ export class LetterFastGame extends preact.Component {
         this.synced.cfgWidth = width;
         this.synced.cfgHeight = rows.length;
         this.synced.boardImportError = undefined;
+        updateSingleGameURL();
         console.log(`[board-import] applied ${width}x${rows.length} grid, ${result.words.size} words possible`);
     };
 
@@ -1527,18 +1544,10 @@ export class LetterFastGame extends preact.Component {
             this.synced.joinGameId = urlCode.toUpperCase();
         }
 
-        // ?board=ABCD-EFGH-… in the URL → import the board on load.
-        // Cleared from the URL after applying so subsequent shares don't
-        // re-import on every refresh.
-        if (boardURL.value) {
-            const encoded = boardURL.value;
-            boardURL.reset();
-            const parsed = this.parseBoardInput(encoded);
-            if ("rows" in parsed) {
-                await this.applyImportedBoard(parsed.rows);
-            } else {
-                console.warn("[board-import] URL board param invalid:", parsed.error);
-            }
+        // ?g=<id> in the URL → the id encodes the full board + config. Apply it and restore any saved progress for that game from OPFS. Stays in the URL so refreshes resume and the URL is always shareable.
+        if (singleGameURL.value && !challengeURL.value && !joinGameIdURL.value) {
+            const ok = await applySingleGameFromURL();
+            if (!ok) singleGameURL.reset();
         }
         if (!isNode()) {
             this.calculateScale();
