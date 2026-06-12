@@ -299,6 +299,7 @@ export class LetterFastGame extends preact.Component {
         selectedCells: [] as { row: number; col: number }[],
         pulseCells: [] as { row: number; col: number }[],
         demoCells: [] as { row: number; col: number }[],
+        demoFilterCell: undefined as { row: number; col: number } | undefined,
         acceptedCells: [] as { row: number; col: number }[],
         recentAcceptedWord: undefined as string | undefined,
         recentAcceptedToken: 0,
@@ -1682,6 +1683,8 @@ export class LetterFastGame extends preact.Component {
         matchedCount: number;
         readyPath: { row: number; col: number }[] | undefined;
         finishedPaths: { row: number; col: number }[][];
+        // Every missed word's best path (score-sorted), for the tap-a-tile filter on the finished board.
+        allMissedPaths: { row: number; col: number }[][];
     } | undefined;
     demoFinishedIndex = 0;
 
@@ -1766,16 +1769,33 @@ export class LetterFastGame extends preact.Component {
             finishedScored.push({ path: best, score: bestScore, word });
         }
         finishedScored.sort((a, b) => b.score - a.score || a.word.localeCompare(b.word));
-        const finishedPaths = finishedScored.slice(0, DEMO_FINISHED_TOP_N).map(s => s.path);
+        const allMissedPaths = finishedScored.map(s => s.path);
+        const finishedPaths = allMissedPaths.slice(0, DEMO_FINISHED_TOP_N);
 
         this.demoCache = {
             grid,
             matchedCount: gameState.matchedWords.length,
             readyPath,
             finishedPaths,
+            allMissedPaths,
         };
         this.demoFinishedIndex = 0;
+        this.synced.demoFilterCell = undefined;
         return this.demoCache;
+    };
+
+    // Tap on a finished board: filter the missed-words demo down to words whose path uses that tile. Tapping the same tile again clears the filter.
+    toggleDemoFilterCell = (cell: { row: number; col: number }) => {
+        const cur = this.synced.demoFilterCell;
+        if (cur && cur.row === cell.row && cur.col === cell.col) {
+            this.synced.demoFilterCell = undefined;
+        } else {
+            this.synced.demoFilterCell = cell;
+        }
+        this.demoFinishedIndex = 0;
+        this.synced.demoCells = [];
+        this.redraw();
+        this.scheduleDemoTick(150);
     };
 
     runDemoCycle = async () => {
@@ -1800,11 +1820,15 @@ export class LetterFastGame extends preact.Component {
         }
         let path: { row: number; col: number }[] | undefined;
         if (gameState.status === "finished") {
-            if (cache.finishedPaths.length === 0) {
+            const filter = this.synced.demoFilterCell;
+            const list = filter
+                ? cache.allMissedPaths.filter(p => p.some(c => c.row === filter.row && c.col === filter.col))
+                : cache.finishedPaths;
+            if (list.length === 0) {
                 this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
                 return;
             }
-            path = cache.finishedPaths[this.demoFinishedIndex % cache.finishedPaths.length];
+            path = list[this.demoFinishedIndex % list.length];
             this.demoFinishedIndex++;
         } else {
             path = cache.readyPath;
@@ -1864,6 +1888,12 @@ export class LetterFastGame extends preact.Component {
     }
 
     handleSelectionStart = async (pos: { x: number; y: number }) => {
+        // Finished single-player board: taps select a tile to filter the missed-words demo (replacing the old tap-anywhere-to-restart — Play Again has its own buttons now).
+        if (!gameState.isMultiplayer && gameState.status === "finished") {
+            const cell = getCellAt(pos);
+            if (cell) this.toggleDemoFilterCell(cell);
+            return;
+        }
         if (gameState.isMultiplayer) {
             if (gameState.status !== "playing"
                 && gameState.gameId
@@ -2604,6 +2634,23 @@ export class LetterFastGame extends preact.Component {
                                                 }}
                                             />
                                         )}
+                                        {gameState.status === "finished"
+                                            && this.synced.demoFilterCell
+                                            && this.synced.demoFilterCell.row === ri
+                                            && this.synced.demoFilterCell.col === ci
+                                            && (
+                                                <div
+                                                    className={css.absolute.pos(0, 0).fillBoth
+                                                        .borderRadius(8)
+                                                    }
+                                                    style={{
+                                                        border: "3px solid rgba(255, 200, 60, 0.95)",
+                                                        boxShadow: "0 0 14px rgba(255, 200, 60, 0.6)",
+                                                        background: "rgba(255, 200, 60, 0.18)",
+                                                        pointerEvents: "none",
+                                                    }}
+                                                />
+                                            )}
                                         {this.synced.acceptedCells.some(c => c.row === ri && c.col === ci) && (
                                             <div
                                                 className={css.absolute.pos(0, 0).fillBoth
@@ -2758,16 +2805,6 @@ export class LetterFastGame extends preact.Component {
                                 ✕
                             </div>
                         </div>
-                    )}
-                    {gameState.status === "finished" && (
-                        <div
-                            title="Click to play again"
-                            className={css.absolute.pos(0, 0).fillBoth
-                                .hbox(0).justifyContent("center")
-                                .borderRadius(8).cursor("pointer")
-                            }
-                            onClick={async () => await startGame()}
-                        />
                     )}
                 </div>
             </div>
