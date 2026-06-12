@@ -2572,6 +2572,7 @@ export class LetterFastGame extends preact.Component {
                                                 || css.hsl(0, 0, 95).colorhsl(0, 0, 0)
                                             )
                                             + (isExhausted && css.opacity(0.3))
+                                            + " board-letter"
                                         }
                                         style={{
                                             border: isSelected && "3px solid transparent" || "3px solid #ddd",

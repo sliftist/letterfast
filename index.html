@@ -19,8 +19,14 @@
             word-break: break-word;
         }
         body, button, textarea, .FullscreenModal {
-            font-family: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
             font-size: 12px;
+        }
+        /* Board tiles only: Atkinson's barred capital I disambiguates I vs L
+         * on the grid. The font is subset to just "I", so all other glyphs in
+         * the tile (and regular text everywhere else) stay Inter. */
+        .board-letter {
+            font-family: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
         body, .FullscreenModal {
             background: transparent!important;
