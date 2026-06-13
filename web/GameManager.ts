@@ -583,8 +583,13 @@ export async function broadcastToGame(gameId: string, callback: (client: ClientH
     const game = games.get(gameId);
     if (!game) return;
 
-    const players = game.players.slice();
-    if (players.length === 0) return;
+    // Skip disconnected players: their handles are dead, so awaiting them just
+    // burns the full broadcast timeout and serializes everyone else behind it.
+    // They get fully resynced from in-memory state the moment they rejoin.
+    const targets = game.players
+        .map((player, i) => ({ player, i }))
+        .filter(t => !game.disconnectedPlayers.has(t.player));
+    if (targets.length === 0) return;
 
     // A failed broadcast NEVER deletes the game. Games are persisted by id and
     // survive disconnects, refreshes, and restarts; the only ways a game goes
@@ -593,7 +598,7 @@ export async function broadcastToGame(gameId: string, callback: (client: ClientH
     // whenever their socket blipped — they'd reconnect to a freshly generated
     // board under the same id, and any in-flight word submission would be
     // rejected with "game not found".
-    await Promise.all(players.map(async (player, i) => {
+    await Promise.all(targets.map(async ({ player, i }) => {
         try {
             await Promise.race([
                 callback(player, i),

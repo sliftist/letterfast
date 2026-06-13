@@ -189,12 +189,11 @@ const serverHandlers = {
         setupPlayerDisconnect(sanitized, player);
 
         if (game) {
-            const players = GameManager.getPlayerScores(sanitized);
             let gameT = game;
             // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update.
             setImmediate(() => {
                 void (async () => {
-                    // Send order matters for reconnects: onGameStart resets the client's score/words (correct for a fresh game), so the snapshot must be LAST — it's the authoritative resync that restores score, grid, seat, and word lists after a rejoin mid-game.
+                    // Restore the rejoining player FIRST and DIRECTLY (everything is already in memory). onGameStart flips them to the board, then their own snapshot restores grid + scores + word lists in one message. This must not sit behind broadcasts to other players — a dead/slow connection elsewhere would otherwise delay the rejoiner's words by the broadcast timeout.
                     if (gameT.status === "playing" && gameT.startTime) {
                         try {
                             await player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
@@ -202,10 +201,20 @@ const serverHandlers = {
                             console.error(`onGameStart to rejoining player failed:`, (err as Error).stack ?? err);
                         }
                     }
-                    await GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
-                        await playerClient.onPlayerUpdate(sanitized, players, game!.status, playerIndex);
+                    const ownSnapshot = GameManager.getSnapshot(sanitized, player);
+                    if (ownSnapshot) {
+                        try {
+                            await player.onGameState(ownSnapshot);
+                        } catch (err) {
+                            console.error(`onGameState to rejoining player failed:`, (err as Error).stack ?? err);
+                        }
+                    }
+                    // Then notify everyone else, fire-and-forget — never blocks the rejoiner.
+                    const players = GameManager.getPlayerScores(sanitized);
+                    void GameManager.broadcastToGame(sanitized, async (playerClient, playerIndex) => {
+                        await playerClient.onPlayerUpdate(sanitized, players, gameT.status, playerIndex);
                     });
-                    await broadcastSnapshot(sanitized);
+                    void broadcastSnapshot(sanitized);
                 })();
             });
         }
