@@ -1533,12 +1533,22 @@ export class LetterFastGame extends preact.Component {
     };
 
     onJoinGameFromMenu = async () => {
-        if (!this.synced.joinGameId) {
+        const code = (this.synced.joinGameId || "").trim().toUpperCase();
+        if (!code) {
             this.synced.menuError = "Please enter a game ID";
             return;
         }
         this.synced.menuOpen = false;
-        await this.startOrJoinMultiplayer();
+        this.synced.menuError = undefined;
+        this.synced.isConverting = true;
+        this.synced.joining = true;
+        try {
+            // Always join the typed code, even if we're already in another multiplayer game — connectToMultiplayer tears down the current connection first. (Routing through startOrJoinMultiplayer would ignore the code while already in a game.)
+            await this.connectToMultiplayer(code, { autoStartAsHost: true });
+        } finally {
+            this.synced.isConverting = false;
+            this.synced.joining = false;
+        }
     };
 
     async componentDidMount() {
