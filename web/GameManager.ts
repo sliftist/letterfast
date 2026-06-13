@@ -586,7 +586,14 @@ export async function broadcastToGame(gameId: string, callback: (client: ClientH
     const players = game.players.slice();
     if (players.length === 0) return;
 
-    const results = await Promise.all(players.map(async (player, i) => {
+    // A failed broadcast NEVER deletes the game. Games are persisted by id and
+    // survive disconnects, refreshes, and restarts; the only ways a game goes
+    // away are the empty-game grace timer (everyone gone for the grace period)
+    // and the 30-day DB prune. Deleting here used to wipe a solo player's game
+    // whenever their socket blipped — they'd reconnect to a freshly generated
+    // board under the same id, and any in-flight word submission would be
+    // rejected with "game not found".
+    await Promise.all(players.map(async (player, i) => {
         try {
             await Promise.race([
                 callback(player, i),
@@ -594,23 +601,10 @@ export async function broadcastToGame(gameId: string, callback: (client: ClientH
                     setTimeout(() => reject(new Error(`Broadcast to player ${i} in game ${gameId} timed out after ${BROADCAST_TIMEOUT_MS}ms`)), BROADCAST_TIMEOUT_MS);
                 }),
             ]);
-            return true;
         } catch (error) {
             console.error(`Broadcast to player ${i} in game ${gameId} failed:`, error);
-            return false;
         }
     }));
-
-    // Only auto-delete the game when every CONNECTED player's broadcast
-    // failed — if all the listed slots are intentionally disconnected
-    // (everyone closed the tab), let the empty-game grace timer handle
-    // cleanup so a refresh can still rejoin.
-    const connectedResults = results.filter((_, i) => !game.disconnectedPlayers.has(players[i]));
-    const anySucceeded = connectedResults.some(r => r);
-    if (connectedResults.length > 0 && !anySucceeded && games.get(gameId) === game) {
-        console.warn(`All broadcasts failed for game ${gameId}, removing game`);
-        games.delete(gameId);
-    }
 }
 
 export function updateGameSettings(config: {

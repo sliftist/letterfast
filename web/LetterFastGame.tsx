@@ -1947,31 +1947,15 @@ export class LetterFastGame extends preact.Component {
     }
 
     handleSelectionStart = async (pos: { x: number; y: number }) => {
-        // Finished single-player board: taps select a tile to filter the missed-words demo (replacing the old tap-anywhere-to-restart — Play Again has its own buttons now).
+        // Finished single-player board: taps pick a tile to filter the missed-words demo (showing only missed words that use that tile). Never starts a game.
         if (!gameState.isMultiplayer && gameState.status === "finished") {
             const cell = getCellAt(pos);
             if (cell) this.toggleDemoFilterCell(cell);
             return;
         }
-        if (gameState.isMultiplayer) {
-            if (gameState.status !== "playing"
-                && gameState.gameId
-                && gameState.myPlayerIndex === 0
-            ) {
-                try {
-                    const rpc = getRPCClient();
-                    await rpc.startGame(gameState.gameId);
-                } catch (error) {
-                    console.error("Failed to start multiplayer game:", error);
-                }
-            }
-        } else if (gameState.status === "ready") {
-            await startGame(false);
-            this.synced.selectedCells = [];
-            this.synced.pulseCells = [];
-            this.synced.floatingScores = [];
-            if (DEBUG_MODE) this.synced.debugPositions = [];
-        }
+        // We never start a game from board interaction. A game is either already
+        // playing (draw), or it's ready/finished and there's a Start / New Game
+        // button to use instead. Interacting with a non-playing board does nothing.
         if (gameState.status !== "playing") return;
         if (Date.now() < gameState.timeoutUntil) return;
         this.synced.selectedCells = [];
@@ -2348,6 +2332,23 @@ export class LetterFastGame extends preact.Component {
                         </div>
                     ))}
                 </div>
+                {!gameState.isMultiplayer && gameState.status === "ready" && (
+                    <button
+                        onClick={async () => { await startGame(false); }}
+                        className={css.hbox(6).alignItems("center")
+                            .pad2(8, 14).borderRadius(8)
+                            .fontSize(16).fontWeight("bold")
+                            .colorhsl(0, 0, 100).cursor("pointer")
+                            .border("2px solid rgba(120, 255, 160, 0.85)")
+                            + ""}
+                        style={{
+                            background: "linear-gradient(135deg, rgba(0,200,120,0.4), rgba(0,140,90,0.4))",
+                            boxShadow: "0 0 14px rgba(120, 255, 160, 0.45)",
+                        }}
+                    >
+                        ▶ Start
+                    </button>
+                )}
                 {!gameState.isMultiplayer && (gameState.status === "finished" || gameState.coopInfinite) && (
                     <button
                         onClick={async () => { await startGame(); }}
