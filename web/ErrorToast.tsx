@@ -10,7 +10,22 @@ const errorState = observable({
     expanded: false,
 });
 
+// Benign browser noise we never want surfaced. "ResizeObserver loop completed
+// with undelivered notifications" (and the older "loop limit exceeded") fire
+// when a resize callback causes another layout change; it's harmless and has no
+// real source fix, so it's filtered here.
+const IGNORED_ERROR_PATTERNS = [
+    "ResizeObserver loop completed with undelivered notifications",
+    "ResizeObserver loop limit exceeded",
+];
+
+function isIgnoredErrorMessage(message: string | undefined): boolean {
+    if (!message) return false;
+    return IGNORED_ERROR_PATTERNS.some(p => message.includes(p));
+}
+
 export function reportError(message: string) {
+    if (isIgnoredErrorMessage(message)) return;
     errorState.errors.push({ message, at: Date.now() });
     if (errorState.errors.length > MAX_ERRORS) {
         errorState.errors.shift();
@@ -48,9 +63,16 @@ function formatRejection(reason: unknown): string {
 export function installGlobalErrorHandlers() {
     if (isNode()) return;
     window.addEventListener("error", e => {
+        // Suppress the harmless ResizeObserver loop notice entirely — don't
+        // toast it and don't log it (it would just spam the console).
+        if (isIgnoredErrorMessage(e.message) || isIgnoredErrorMessage((e.error as { message?: string } | undefined)?.message)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         reportError(formatErrorEvent(e));
         // Also log so the devtools console has the raw event (browsers
-        // expose more context there than the global handler ever gets).
+        // expose more context than the global handler ever gets).
         console.error("[global error]", e.error || e.message, e);
     });
     window.addEventListener("unhandledrejection", e => {
