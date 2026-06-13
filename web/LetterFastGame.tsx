@@ -1375,15 +1375,68 @@ export class LetterFastGame extends preact.Component {
         }
     };
 
-    applyConfigAndStart = async () => {
-        const w = this.synced.cfgWidth;
-        const h = this.synced.cfgHeight;
-        if (w < 2 || w > 10 || h < 2 || h > 10) return;
-        await changeGridSize({ width: w, height: h });
+    // Starts a fresh single-player game using the menu's configured settings
+    // (which the menu keeps == the last configured state). Applies grid size,
+    // duration, mode, and goal, then regenerates the board.
+    startConfiguredSinglePlayerGame = async () => {
+        const w = Math.max(2, Math.min(10, this.synced.cfgWidth));
+        const h = Math.max(2, Math.min(10, this.synced.cfgHeight));
+        gameState.gridWidth = w;
+        gameState.gridHeight = h;
         gameState.gameDuration = this.synced.cfgDuration;
-        gameState.timeRemaining = this.synced.cfgDuration;
-        this.synced.menuOpen = false;
+        applySettings({
+            showRemainingWordsPerCell: this.synced.cfgShowRemaining,
+            showTotalPossibleScore: this.synced.cfgShowTotal,
+            gameMode: this.synced.cfgGameMode,
+            coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
+        });
         await startGame();
+    };
+
+    // Loads the menu's editable config (cfg*) from the right source: the
+    // CURRENT game's live settings while a game exists, or the saved "last
+    // configured state" once the game is over (no current game). Called when
+    // the menu opens so it always reflects what it should.
+    refreshMenuConfig = () => {
+        const saved = loadSavedConfig();
+        const hasCurrentGame = gameState.status !== "finished";
+        if (hasCurrentGame) {
+            this.synced.cfgWidth = gameState.gridWidth;
+            this.synced.cfgHeight = gameState.gridHeight;
+            this.synced.cfgDuration = gameState.gameDuration;
+            this.synced.cfgShowRemaining = gameState.showRemainingWordsPerCell;
+            this.synced.cfgShowTotal = gameState.showTotalPossibleScore;
+            this.synced.cfgGameMode = gameState.gameMode;
+            this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
+        } else if (saved) {
+            this.synced.cfgWidth = saved.gridWidth;
+            this.synced.cfgHeight = saved.gridHeight;
+            this.synced.cfgDuration = saved.gameDuration;
+            this.synced.cfgShowRemaining = !!saved.showRemainingWordsPerCell;
+            this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
+            this.synced.cfgGameMode = saved.gameMode ?? DEFAULT_GAME_MODE;
+            this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION) * 100);
+        }
+        // autoBestPath is a client-side preference, never part of a game's shared state — always from saved prefs.
+        this.synced.cfgAutoBestPath = saved ? saved.autoBestPath !== false : true;
+        this.synced.cfgDurationStr = String(Math.round(this.synced.cfgDuration / 1000));
+        this.synced.cfgCoopGoalPctStr = String(this.synced.cfgCoopGoalPct);
+    };
+
+    // Copies the current/last game's settings into the editable config (and
+    // persists them), so after a game — especially a multiplayer one someone
+    // else configured — you can adopt those settings as your own.
+    copyConfigFromLastGame = () => {
+        this.synced.cfgWidth = gameState.gridWidth;
+        this.synced.cfgHeight = gameState.gridHeight;
+        this.synced.cfgDuration = gameState.gameDuration;
+        this.synced.cfgDurationStr = String(Math.round(gameState.gameDuration / 1000));
+        this.synced.cfgShowRemaining = gameState.showRemainingWordsPerCell;
+        this.synced.cfgShowTotal = gameState.showTotalPossibleScore;
+        this.synced.cfgGameMode = gameState.gameMode;
+        this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
+        this.synced.cfgCoopGoalPctStr = String(Math.round(gameState.coopGoalFraction * 100));
+        this.saveMenuConfig();
     };
 
     toggleMenu = () => {
@@ -1391,6 +1444,7 @@ export class LetterFastGame extends preact.Component {
             this.synced.menuOpen = false;
             return;
         }
+        this.refreshMenuConfig();
         this.synced.menuOpen = true;
         // The textarea is uncontrolled: it picks up its initial value from
         // `defaultValue={this.gridToText(...)}` on mount when the menu opens.
@@ -1459,25 +1513,24 @@ export class LetterFastGame extends preact.Component {
     };
 
     copyBoardText = () => {
-        // The textarea may have been edited; honor the live value when
-        // building the share URL so users can tweak letters first.
+        // Default to the live board (works in multiplayer too, and keeps
+        // multipliers), but if the textarea was edited to different letters,
+        // honor those instead. buildBoardShareUrl always produces a `?g=`
+        // link, which is always opened as a fresh single-player game — there's
+        // no way to launch multiplayer from a board link.
+        let grid: GridCell[][] = gameState.grid;
         const raw = this.boardTextareaRef?.value;
-        let parsed: { rows: string[] } | { error: string } | undefined;
         if (raw && raw.trim().length > 0) {
-            parsed = this.parseBoardInput(raw);
+            const parsed = this.parseBoardInput(raw);
+            if ("rows" in parsed && parsed.rows.join("\n") !== this.gridToText(gameState.grid)) {
+                grid = parsed.rows.map(row => Array.from(row).map((letter): GridCell => ({
+                    letter,
+                    points: LETTER_POINTS[letter] || 1,
+                    multiplier: 1,
+                })));
+            }
         }
-        let url: string;
-        if (parsed && "rows" in parsed) {
-            // Re-encode whatever's in the textarea as a shareable game id (multiplier-less board, current duration/mode settings).
-            const grid: GridCell[][] = parsed.rows.map(row => Array.from(row).map((letter): GridCell => ({
-                letter,
-                points: LETTER_POINTS[letter] || 1,
-                multiplier: 1,
-            })));
-            url = this.buildBoardShareUrl(grid);
-        } else {
-            url = this.buildBoardShareUrl(gameState.grid);
-        }
+        const url = this.buildBoardShareUrl(grid);
         if (this.copyTextToClipboard(url)) {
             this.synced.boardImportCopied = true;
             setTimeout(() => { this.synced.boardImportCopied = false; }, 1500);
@@ -2341,20 +2394,6 @@ export class LetterFastGame extends preact.Component {
                 >
                     👥
                 </button>
-                <button
-                    onClick={this.toggleVoiceMode}
-                    title={this.synced.voiceError
-                        || (this.synced.voiceLoading ? `Loading voice model… ${this.synced.voiceStatus || ""}`.trim()
-                            : this.synced.voiceModeOn ? `Voice mode on (${this.synced.voiceStatus || "listening"}) — click to turn off`
-                                : "Voice mode off (click to turn on)")
-                    }
-                    className={css.fontSize(20).pad2(4, 8)
-                        + (this.synced.voiceModeOn ? css.hsl(120, 50, 25).colorhsl(0, 0, 100) : "")
-                        + (this.synced.voiceLoading ? css.hsl(45, 60, 25).colorhsl(0, 0, 100) : "")
-                    }
-                >
-                    {this.synced.voiceLoading ? "⏳" : this.synced.voiceModeOn ? "🎤" : "🎙️"}
-                </button>
                 {gameState.lastGameOverState && (
                     <button
                         onClick={() => {
@@ -2516,7 +2555,7 @@ export class LetterFastGame extends preact.Component {
         };
         const startSingleplayer = async () => {
             if (gameState.isMultiplayer) this.leaveMultiplayer();
-            await startGame();
+            await this.startConfiguredSinglePlayerGame();
         };
         const startMultiplayer = async () => {
             await this.startOrJoinMultiplayer();
@@ -2539,22 +2578,6 @@ export class LetterFastGame extends preact.Component {
                         || (gameState.isMultiplayer && gameState.status === "playing") && "👥 New Multiplayer Game"
                         || "👥 Start Multiplayer"}
                 </button>
-                <button
-                    onClick={this.toggleVoiceMode}
-                    title={this.synced.voiceError || (this.synced.voiceModeOn ? "Voice mode is on — speak words to play" : "Speak words to play them automatically")}
-                    className={btn}
-                >
-                    {this.synced.voiceLoading
-                        ? "⏳ Voice Mode: Loading…"
-                        : this.synced.voiceModeOn
-                            ? `🎤 Voice Mode: On${this.synced.voiceStatus ? ` (${this.synced.voiceStatus})` : ""}`
-                            : "🎙️ Voice Mode: Off"}
-                </button>
-                {this.synced.voiceError && (
-                    <div className={css.fontSize(11).colorhsl(0, 70, 60).pad2(2, 10) + ""}>
-                        {this.synced.voiceError}
-                    </div>
-                )}
                 {gameState.status === "playing" && !gameState.isMultiplayer && (
                     <button onClick={closeAfter(() => endGame())} className={btn}>
                         ⏹️ End Now
@@ -3033,12 +3056,11 @@ export class LetterFastGame extends preact.Component {
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
                         const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
-                        const mode = inMultiplayer ? gameState.gameMode : this.synced.cfgGameMode;
                         return (
                             <div className={css.vbox(4)}>
                                 <div className={sectionTitle}>Mode{inMultiplayer && !isHost ? " (host only)" : ""}</div>
                                 <select
-                                    value={mode}
+                                    value={this.synced.cfgGameMode}
                                     disabled={!isHost}
                                     title={!isHost ? "Only the host can change this" : undefined}
                                     onChange={(e) => {
@@ -3055,7 +3077,7 @@ export class LetterFastGame extends preact.Component {
                         );
                     })()}
 
-                    {((gameState.isMultiplayer ? gameState.gameMode : this.synced.cfgGameMode) === "cooperative") ? (
+                    {(this.synced.cfgGameMode === "cooperative") ? (
                         <div className={css.vbox(4)}>
                             <div className={sectionTitle}>Coop Goal (% of points){hostOnlySuffix}</div>
                             <input
@@ -3116,8 +3138,8 @@ export class LetterFastGame extends preact.Component {
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
                         const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
-                        const showRem = inMultiplayer ? gameState.showRemainingWordsPerCell : this.synced.cfgShowRemaining;
-                        const showTot = inMultiplayer ? gameState.showTotalPossibleScore : this.synced.cfgShowTotal;
+                        const showRem = this.synced.cfgShowRemaining;
+                        const showTot = this.synced.cfgShowTotal;
                         return (
                             <div className={css.vbox(4)}>
                                 <div className={sectionTitle}>Display{inMultiplayer && !isHost ? " (host only)" : ""}</div>
@@ -3217,6 +3239,14 @@ export class LetterFastGame extends preact.Component {
                             Import board
                         </button>
                     </div>
+
+                    <button
+                        onClick={this.copyConfigFromLastGame}
+                        title="Set your configuration to match the current/last game's settings"
+                        className={css.fontSize(13).pad2(6, 10) + ""}
+                    >
+                        Copy settings from last game
+                    </button>
                 </div>
             </div>
         );
@@ -3277,7 +3307,6 @@ export class LetterFastGame extends preact.Component {
                 .hsl(240, 30, 15).borderRadius(8).pad2(12)
                 .colorhsl(0, 0, 100)
             }>
-                {this.renderVoiceTranscript()}
                 {gameState.matchedWords.slice().reverse().map((w, i) => {
                     const letter = typeof w.playerIndex === "number"
                         ? String.fromCharCode(65 + w.playerIndex)
