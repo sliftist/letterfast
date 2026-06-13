@@ -1,9 +1,20 @@
 import { URLParam } from "sliftutils/render-utils/URLParam";
 import { isNode } from "typesafecss";
-import { gameState, GridCell, LETTER_POINTS, GameMode, ensureCellToWordsForGrid } from "./GameState";
+import { gameState, GridCell, LETTER_POINTS, GameMode, ensureCellToWordsForGrid, GAME_DURATION, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION } from "./GameState";
 import { findAllWordsInGrid, getWordTrie, calculateTotalScoreForWords } from "./GridGenerator";
 
-// Single-player games are identified by a URL param whose value base64url-encodes the FULL game configuration: board letters, multipliers, duration, mode, and coop goal. The id alone recreates the board, so sharing the URL shares the game (this replaces the old ?board= link format). Per-id progress (words found, score, elapsed time, status) is stored in the origin-private file system, one file per game keyed by a hash of the id — so reloading the page resumes your game, while someone else opening your link gets the same board fresh.
+// Single-player games are identified by a compact URL param that custom-encodes the game config. The id alone recreates the board, so sharing the URL shares the game. Per-id progress (words, score, elapsed time, status) lives in the origin-private file system, one file per game keyed by a hash of the id — reloading resumes your game, while someone else opening your link gets the same board fresh.
+//
+// Id format (segments joined by "."), kept minimal — letters are already
+// URL-safe so they're stored raw, and anything matching a default is omitted:
+//   seg[0]  LETTERS        row-major board letters (A-Z), width*height of them
+//   seg[1]  WIDTH          grid width as digits (height = letters.length / width)
+//   .m...   MULTIPLIERS    3 chars each: 2-digit cell index + 1-digit value (2|3); omitted when all cells are 1
+//   .d<s>   DURATION       seconds; omitted when default
+//   .g<c>   MODE           "r"=competitive, "s"=competitive-shared; cooperative (default) omitted
+//   .p<n>   COOP GOAL      percent; omitted when default (only meaningful for cooperative)
+// The leading char is always a letter so sliftutils' niceStringify stores it
+// verbatim (a leading digit would get JSON-quoted).
 
 export const singleGameURL = new URLParam("g", "");
 
@@ -12,7 +23,8 @@ const AUTOSAVE_INTERVAL = 2000;
 // Idle elapsed-time progress is only persisted when it crosses one of these buckets, so an idle-but-open game doesn't rewrite its save file every tick (word/score changes still save within AUTOSAVE_INTERVAL).
 const ELAPSED_SAVE_BUCKET = 15 * 1000;
 const SAVE_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-const ENCODED_GAME_VERSION = 1;
+const DEFAULT_DURATION_SECONDS = Math.round(GAME_DURATION / 1000);
+const DEFAULT_COOP_GOAL_PERCENT = Math.round(DEFAULT_COOP_GOAL_FRACTION * 100);
 
 export interface SingleGameConfig {
     grid: GridCell[][];
@@ -30,70 +42,89 @@ export interface SingleGameProgress {
     savedAt: number;
 }
 
-interface EncodedGame {
-    v: number;
-    w: number;
-    h: number;
-    // Letters and multipliers, row-major, one char per cell.
-    l: string;
-    m: string;
-    d: number;
-    gm: string;
-    cg: number;
-}
-
-function toBase64Url(s: string): string {
-    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function fromBase64Url(s: string): string {
-    return atob(s.replace(/-/g, "+").replace(/_/g, "/"));
-}
-
 export function encodeSingleGameId(config: SingleGameConfig): string {
-    const encoded: EncodedGame = {
-        v: ENCODED_GAME_VERSION,
-        w: config.grid[0].length,
-        h: config.grid.length,
-        l: config.grid.map(row => row.map(c => c.letter).join("")).join(""),
-        m: config.grid.map(row => row.map(c => String(c.multiplier)).join("")).join(""),
-        d: config.gameDuration,
-        gm: config.gameMode,
-        cg: config.coopGoalFraction,
-    };
-    return toBase64Url(JSON.stringify(encoded));
+    const width = config.grid[0].length;
+    const letters = config.grid.map(row => row.map(c => c.letter).join("")).join("");
+    let out = letters + "." + width;
+
+    let mult = "";
+    config.grid.forEach((row, r) => row.forEach((cell, c) => {
+        if (cell.multiplier !== 1) {
+            mult += String(r * width + c).padStart(2, "0") + String(cell.multiplier);
+        }
+    }));
+    if (mult) out += ".m" + mult;
+
+    const seconds = Math.round(config.gameDuration / 1000);
+    if (seconds !== DEFAULT_DURATION_SECONDS) out += ".d" + seconds;
+
+    if (config.gameMode === "competitive") out += ".gr";
+    else if (config.gameMode === "competitive-shared") out += ".gs";
+
+    if (config.gameMode === "cooperative") {
+        const pct = Math.round(config.coopGoalFraction * 100);
+        if (pct !== DEFAULT_COOP_GOAL_PERCENT) out += ".p" + pct;
+    }
+
+    return out;
 }
 
 export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
-    let e: EncodedGame;
-    try {
-        e = JSON.parse(fromBase64Url(id)) as EncodedGame;
-    } catch {
-        return undefined;
+    if (!id) return undefined;
+    const segs = id.split(".");
+    const letters = segs[0];
+    const width = parseInt(segs[1], 10);
+    if (!/^[A-Z]+$/.test(letters)) return undefined;
+    if (!Number.isInteger(width) || width < 2 || width > 10) return undefined;
+    if (letters.length % width !== 0) return undefined;
+    const height = letters.length / width;
+    if (height < 2 || height > 10) return undefined;
+
+    let gameDuration = GAME_DURATION;
+    let gameMode: GameMode = DEFAULT_GAME_MODE;
+    let coopGoalFraction = DEFAULT_COOP_GOAL_FRACTION;
+    const multipliers = new Map<number, 2 | 3>();
+
+    for (let i = 2; i < segs.length; i++) {
+        const seg = segs[i];
+        const key = seg[0];
+        const data = seg.slice(1);
+        if (key === "m") {
+            for (let j = 0; j + 3 <= data.length; j += 3) {
+                const idx = parseInt(data.slice(j, j + 2), 10);
+                const val = parseInt(data[j + 2], 10);
+                if (Number.isInteger(idx) && (val === 2 || val === 3)) {
+                    multipliers.set(idx, val);
+                }
+            }
+        } else if (key === "d") {
+            const seconds = parseInt(data, 10);
+            if (seconds >= 10 && seconds <= 3600) gameDuration = seconds * 1000;
+        } else if (key === "g") {
+            if (data === "r") gameMode = "competitive";
+            else if (data === "s") gameMode = "competitive-shared";
+            else if (data === "c") gameMode = "cooperative";
+        } else if (key === "p") {
+            const pct = parseInt(data, 10);
+            if (pct >= 5 && pct <= 100) coopGoalFraction = pct / 100;
+        }
     }
-    if (e.v !== ENCODED_GAME_VERSION) return undefined;
-    if (!Number.isInteger(e.w) || e.w < 2 || e.w > 10) return undefined;
-    if (!Number.isInteger(e.h) || e.h < 2 || e.h > 10) return undefined;
-    if (typeof e.l !== "string" || e.l.length !== e.w * e.h || !/^[A-Z]+$/.test(e.l)) return undefined;
-    if (typeof e.m !== "string" || e.m.length !== e.w * e.h || !/^[123]+$/.test(e.m)) return undefined;
-    if (typeof e.d !== "number" || e.d < 10000 || e.d > 3600000) return undefined;
-    const gameMode: GameMode = e.gm === "competitive" || e.gm === "competitive-shared" ? e.gm : "cooperative";
-    const coopGoalFraction = typeof e.cg === "number" ? Math.max(0.05, Math.min(1, e.cg)) : 0.25;
 
     const grid: GridCell[][] = [];
-    for (let r = 0; r < e.h; r++) {
+    for (let r = 0; r < height; r++) {
         const row: GridCell[] = [];
-        for (let c = 0; c < e.w; c++) {
-            const letter = e.l[r * e.w + c];
+        for (let c = 0; c < width; c++) {
+            const idx = r * width + c;
+            const letter = letters[idx];
             row.push({
                 letter,
                 points: LETTER_POINTS[letter] || 1,
-                multiplier: Number(e.m[r * e.w + c]) as 1 | 2 | 3,
+                multiplier: multipliers.get(idx) ?? 1,
             });
         }
         grid.push(row);
     }
-    return { grid, gameDuration: e.d, gameMode, coopGoalFraction };
+    return { grid, gameDuration, gameMode, coopGoalFraction };
 }
 
 // Recomputes the id from the live game and puts it in the URL. Called whenever a new single-player board comes into existence (new game, grid resize, board import).
