@@ -549,7 +549,10 @@ export class LetterFastGame extends preact.Component {
         this.synced.joining = true;
         this.synced.menuError = undefined;
         try {
-            if (!gameState.isMultiplayer || !gameState.gameId) {
+            if (gameState.isMultiplayer && gameState.gameId && gameState.status === "playing") {
+                // Already mid-game: the current room can't be restarted while playing, so break off into a brand new game with a fresh id (the old game persists for anyone still in it).
+                await this.connectToMultiplayer(randomGameCode(), { autoStartAsHost: true });
+            } else if (!gameState.isMultiplayer || !gameState.gameId) {
                 const code = (this.synced.joinGameId || randomGameCode()).toUpperCase();
                 await this.connectToMultiplayer(code, { autoStartAsHost: true });
             } else {
@@ -2515,8 +2518,9 @@ export class LetterFastGame extends preact.Component {
         const startMultiplayer = async () => {
             await this.startOrJoinMultiplayer();
         };
-        const inMpAsNonHost = gameState.isMultiplayer && gameState.myPlayerIndex !== 0;
-        const mpDisabled = this.synced.isConverting || inMpAsNonHost;
+        // Non-host restriction only applies in the lobby (starting the shared game needs the host). Mid-game, clicking this spins up a NEW game, which anyone may do.
+        const inMpLobbyAsNonHost = gameState.isMultiplayer && gameState.status !== "playing" && gameState.myPlayerIndex !== 0;
+        const mpDisabled = this.synced.isConverting || inMpLobbyAsNonHost;
         return (
             <>
                 <button onClick={closeAfter(startSingleplayer)} className={btn}>
@@ -2525,10 +2529,12 @@ export class LetterFastGame extends preact.Component {
                 <button
                     onClick={closeAfter(startMultiplayer)}
                     disabled={mpDisabled}
-                    title={inMpAsNonHost ? "Only the host can start the game" : undefined}
+                    title={inMpLobbyAsNonHost ? "Only the host can start the game" : undefined}
                     className={btn}
                 >
-                    {this.synced.isConverting && "👥 Starting…" || "👥 Start Multiplayer"}
+                    {this.synced.isConverting && "👥 Starting…"
+                        || (gameState.isMultiplayer && gameState.status === "playing") && "👥 New Multiplayer Game"
+                        || "👥 Start Multiplayer"}
                 </button>
                 <button
                     onClick={this.toggleVoiceMode}
