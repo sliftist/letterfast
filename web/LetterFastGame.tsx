@@ -1538,17 +1538,8 @@ export class LetterFastGame extends preact.Component {
             this.synced.menuError = "Please enter a game ID";
             return;
         }
-        this.synced.menuOpen = false;
-        this.synced.menuError = undefined;
-        this.synced.isConverting = true;
-        this.synced.joining = true;
-        try {
-            // Always join the typed code, even if we're already in another multiplayer game — connectToMultiplayer tears down the current connection first. (Routing through startOrJoinMultiplayer would ignore the code while already in a game.)
-            await this.connectToMultiplayer(code, { autoStartAsHost: true });
-        } finally {
-            this.synced.isConverting = false;
-            this.synced.joining = false;
-        }
+        // Navigate to the join URL and let the page reload handle it — this is the same path as opening a ?join= link directly, which is known to work. Doing it in-place (routing through startOrJoinMultiplayer) ignored the code when already in a game.
+        window.location.href = `${window.location.protocol}//${window.location.host}${window.location.pathname}?page=game&join=${code}`;
     };
 
     async componentDidMount() {
