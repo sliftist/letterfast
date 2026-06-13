@@ -1,25 +1,33 @@
 
-1) Save games to disk, so server can reboot without breaking games
-    - If the reboot is fast enough, which it should be, and everyone reconnects, it should be basically transparent for the server to update. 
+Done?
+    1) Save games to disk, so server can reboot without breaking games
+        - If the reboot is fast enough, which it should be, and everyone reconnects, it should be basically transparent for the server to update. 
 
-1.1) Also have the single game saved to disk so you can refresh the single-player page and it will resume the same single-player game at the same time. Of when it was last saved, and it should save every 15 seconds. 
+    1.1) Also have the single game saved to disk so you can refresh the single-player page and it will resume the same single-player game at the same time. Of when it was last saved, and it should save every 15 seconds. Store the id in the url, so we can reload that game later (The state may have updated it, of course. We don't change the ID every time the game state changes. That'll just be the key that we use when we store it on disk. We should make sure we store it in disk in the private file system. That will give us a lot of space and make it easy to access and make it efficient to access, so we just have to access the single game we want instead of loading in all the games. 
 
-2) versioning of the client so when the server updates, everyone's pages are forced to refresh. Which should again just resume their multiplayer game / single player game 
 
-3) Have the server automatically watch the Git repo and update and restart when it changes. 
+1) Have each multiplayer ID tracked on the server, keeping track of the history of that board, with a button to view that in our database.
+1.1) have some kind of score for a multiplayer ID? The goal can be to get a higher score. More boards completed, etc. 
+    - We need some way for more difficult boards to be worth more. It could just be that the board amount squared is it? the percentage value, not the fractional value. 
+        Hmm... 30**2 = 900, and 50**3 = 2500?
+            - But then the problem is going from 50% to 100% only gets you four times the amount of points. Whereas going from that is actually much harder. 
 
-4) Support users giving feedback and then allow viewing feedback with some kind of password (We can store the hash of the password in the repo. It's fine. It'll just be some long sequence of words, so guessing it will be impossible).
+We should keep track of the history of the IDs of different boards we played. I think we could should keep track of this in indexed DB. And then we should add a button that shows a modal that shows the history of the games. And also in the game over screen it it'd show the history of the most recent games. And in both places, you should be able to click on them, and then it should just go to the game with that in the URL. That way you can review previous games and share them easily, etc. 
 
-5) Saving history of boards you can go to previous boards so you can share it with people. Also, make sure sharing works correctly. 
+
+2) A version of the client-side information that is passed to the clients when they connect to a server. If it's different, then those clients have in their code, then it forces them to refresh the page. We can do this by just having a file that's imported both server-side and client-side, and the server side passes it on the initial connection. We should put a comment on this so that we should only update this if we make a non-backwards compatible change that requires all the clients to update.
+
+
+
+4) Support users giving feedback and then allow viewing feedback with some kind of password (We can store the hash of the password in the repo. It's fine. It'll just be some long sequence of words, so guessing it will be impossible). Eight words from the top 1024 most common words in our word list that's sorted by most common should be enough (that's 80 bits, too much to brute force). Remember the password in the browser in local storage, so I only need to type it in once. 
+
+
+At the top of cooperative mode, in the game over screen, show the percentage target as in "won at 50%!"
 
 
 
 
 1) FIX board importing from url not working (It seems to clobber the url and reset the board to something else)
-
-2) Keep track of the history of the games, and allow us to view a previous game state, like when we are finished (so we can see the board, our picks, our score, the final time, and view the game over screen as well). Track it using DiskCollectionRawBrowser from sliftutils.
-
-3) update the game over screen so that it'll say whether you won or not. And if we're doing it based on a score limit, you should say the total time at the top. Right now it just says game over when you won. So it's almost like saying you lost, even though it should be saying that you won. Although if it's a score limit, we don't say win or lose, we just the time the thing. 
 
 4) Add a campaign type thing where the percentage score gets higher and higher that you need to get, but you also just can retry it, that same percentage score with a different board?
     - I'm thinking maybe we have it a thing where the percentage gets higher every time you beat it and lower every time you lose?

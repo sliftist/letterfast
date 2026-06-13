@@ -470,11 +470,13 @@ export class LetterFastGame extends preact.Component {
         this.midResizeObserver.observe(elem);
     };
 
-    tryStartGameAsHost = async () => {
+    tryStartGameAsHost = async (options?: { autoStart?: boolean }) => {
         if (!gameState.isMultiplayer) return;
         if (!gameState.gameId) return;
         if (gameState.myPlayerIndex !== 0) return;
         if (gameState.status === "playing") return;
+        // Auto-start (fired on connect) must only kick off a genuinely fresh game. Joining a game that already has results ("finished") must not silently regenerate the board — that looks like a reset. Manual starts (no autoStart flag) still restart a finished game on purpose.
+        if (options?.autoStart && gameState.status !== "waiting") return;
         try {
             const rpc = getRPCClient();
             await (rpc as any).updateGameSettings(
@@ -536,7 +538,7 @@ export class LetterFastGame extends preact.Component {
                 },
                 onConnect: () => {
                     if (!autoStartAsHost) return;
-                    setTimeout(() => { void this.tryStartGameAsHost(); }, 250);
+                    setTimeout(() => { void this.tryStartGameAsHost({ autoStart: true }); }, 250);
                 },
             }
         });

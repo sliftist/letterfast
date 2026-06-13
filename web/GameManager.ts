@@ -307,26 +307,23 @@ export function joinGame(gameId: string, player: PlayerIdentifier, clientId = ""
         throw new Error(`Game ${gameId} is full`);
     }
 
-    // A brand-new joiner (no clientId match) walking into a game where every
-    // slot is disconnected gets a fresh game — they shouldn't be stuck
-    // behind ghost slots they can't act for. The original players have
-    // already had their grace window to refresh.
+    // Joining NEVER resets a game. The board, scores, words, and status all
+    // persist (keyed by gameId), so a joiner just takes a seat in whatever
+    // state the game is already in — even an in-progress or finished one. If
+    // every existing player is disconnected ("nobody's in it"), the joiner
+    // takes the host seat (index 0) so they CAN start/restart it manually,
+    // but nothing is wiped by default. The old behavior wiped the game here,
+    // which (combined with the client's auto-start) reset the board out from
+    // under a player who rejoined on a second machine.
     const allDisconnected = game.players.length > 0
         && game.players.every(p => game.disconnectedPlayers.has(p));
-    if (game.players.length === 0 || allDisconnected) {
-        game.players = [];
-        game.clientIds = [];
-        game.scores.clear();
-        game.words.clear();
-        game.disconnectedPlayers.clear();
-        game.status = "waiting";
-        game.startTime = undefined;
-        game.endTime = undefined;
-        game.timerSeqNum++;
+    if (allDisconnected) {
+        game.players.unshift(player);
+        game.clientIds.unshift(clientId);
+    } else {
+        game.players.push(player);
+        game.clientIds.push(clientId);
     }
-
-    game.players.push(player);
-    game.clientIds.push(clientId);
     game.scores.set(player, 0);
     game.words.set(player, []);
     game.emptiedAt = undefined;
