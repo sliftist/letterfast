@@ -55112,6 +55112,8 @@ signposting
 signposts
 signs
 sigs
+sigil
+sigils
 silage
 silence
 silenced

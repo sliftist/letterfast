@@ -1,10 +1,6 @@
 
-Done?
-    1) Save games to disk, so server can reboot without breaking games
-        - If the reboot is fast enough, which it should be, and everyone reconnects, it should be basically transparent for the server to update. 
-
-    1.1) Also have the single game saved to disk so you can refresh the single-player page and it will resume the same single-player game at the same time. Of when it was last saved, and it should save every 15 seconds. Store the id in the url, so we can reload that game later (The state may have updated it, of course. We don't change the ID every time the game state changes. That'll just be the key that we use when we store it on disk. We should make sure we store it in disk in the private file system. That will give us a lot of space and make it easy to access and make it efficient to access, so we just have to access the single game we want instead of loading in all the games. 
-
+1) Controlled point totals, allowing set types of games
+    300 points, 500, 1000, 1500, 2500, 5000
 
 1) Have each multiplayer ID tracked on the server, keeping track of the history of that board, with a button to view that in our database.
 1.1) have some kind of score for a multiplayer ID? The goal can be to get a higher score. More boards completed, etc. 
