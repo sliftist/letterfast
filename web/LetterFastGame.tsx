@@ -1749,14 +1749,15 @@ export class LetterFastGame extends preact.Component {
 
     isDemoEligible(): boolean {
         if (isNode()) return false;
-        if (gameState.isMultiplayer) return false;
         if (this.synced.drawing) return false;
         if (this.synced.menuOpen) return false;
         if (this.synced.joinPopupOpen) return false;
-        if (gameState.status !== "ready" && gameState.status !== "finished") return false;
         if (this.synced.selectedCells.length > 0) return false;
         if (Date.now() < gameState.timeoutUntil) return false;
-        return true;
+        // Multiplayer only runs the post-game missed-words demo (no pre-game
+        // "how to swipe" hint). Single-player runs both.
+        if (gameState.isMultiplayer) return gameState.status === "finished";
+        return gameState.status === "ready" || gameState.status === "finished";
     }
 
     cancelDemoTick = () => {
@@ -1947,8 +1948,8 @@ export class LetterFastGame extends preact.Component {
     }
 
     handleSelectionStart = async (pos: { x: number; y: number }) => {
-        // Finished single-player board: taps pick a tile to filter the missed-words demo (showing only missed words that use that tile). Never starts a game.
-        if (!gameState.isMultiplayer && gameState.status === "finished") {
+        // Finished board: taps pick a tile to filter the missed-words demo (showing only missed words that use that tile). Works in both single-player and multiplayer. Never starts a game.
+        if (gameState.status === "finished") {
             const cell = getCellAt(pos);
             if (cell) this.toggleDemoFilterCell(cell);
             return;

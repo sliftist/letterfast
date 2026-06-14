@@ -488,12 +488,28 @@ export const clientHandlers = {
             gameState.score = players[gameState.myPlayerIndex].score;
         }
         const myPlayerId = gameState.myPlayerIndex !== undefined ? players[gameState.myPlayerIndex]?.id : undefined;
-        if (myPlayerId && allWords[myPlayerId]) {
-            gameState.matchedWords = allWords[myPlayerId];
-            gameState.matchedWordsSet.clear();
-            for (let wordData of allWords[myPlayerId]) {
-                gameState.matchedWordsSet.add(wordData.word);
+        // The board's word list (and the post-game missed-words demo, which is
+        // "everything valid minus these") must match the mode: cooperative is
+        // the COLLECTIVE words everyone found (so missed = words nobody found),
+        // competitive is just THIS player's words (so missed = words you didn't
+        // find). Mirrors the snapshot/onGameState logic for a refreshed client.
+        if (gameState.gameMode === "cooperative") {
+            const collective: { word: string; points: number }[] = [];
+            const seen = new Set<string>();
+            for (const pid of Object.keys(allWords)) {
+                for (const w of allWords[pid]) {
+                    const key = w.word.toUpperCase();
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    collective.push(w);
+                }
             }
+            gameState.matchedWords = collective;
+            gameState.matchedWordsSet = new Set(collective.map(w => w.word.toUpperCase()));
+        } else {
+            const myWords = (myPlayerId && allWords[myPlayerId]) || [];
+            gameState.matchedWords = myWords;
+            gameState.matchedWordsSet = new Set(myWords.map(w => w.word.toUpperCase()));
         }
 
         const gameOverState: GameOverState = {
