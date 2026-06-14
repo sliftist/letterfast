@@ -475,7 +475,7 @@ export class LetterFastGame extends preact.Component {
     tryStartGameAsHost = async (options?: { autoStart?: boolean }) => {
         if (!gameState.isMultiplayer) return;
         if (!gameState.gameId) return;
-        if (gameState.myPlayerIndex !== 0) return;
+        if (gameState.myPlayerIndex !== gameState.hostPlayerIndex) return;
         if (gameState.status === "playing") return;
         // Auto-start (fired on connect) must only kick off a genuinely fresh game. Joining a game that already has results ("finished") must not silently regenerate the board — that looks like a reset. Manual starts (no autoStart flag) still restart a finished game on purpose.
         if (options?.autoStart && gameState.status !== "waiting") return;
@@ -1067,7 +1067,7 @@ export class LetterFastGame extends preact.Component {
 
     private autoStartFromVoice = async (word: string): Promise<boolean> => {
         if (gameState.isMultiplayer) {
-            if (!gameState.gameId || gameState.myPlayerIndex !== 0) {
+            if (!gameState.gameId || gameState.myPlayerIndex !== gameState.hostPlayerIndex) {
                 console.log("[voice] cannot auto-start MP game (not host)");
                 return false;
             }
@@ -1356,7 +1356,7 @@ export class LetterFastGame extends preact.Component {
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
         });
-        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
+        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === gameState.hostPlayerIndex) {
             void (async () => {
                 try {
                     const rpc = getRPCClient();
@@ -2579,7 +2579,7 @@ export class LetterFastGame extends preact.Component {
             await this.startOrJoinMultiplayer();
         };
         // Non-host restriction only applies in the lobby (starting the shared game needs the host). Mid-game, clicking this spins up a NEW game, which anyone may do.
-        const inMpLobbyAsNonHost = gameState.isMultiplayer && gameState.status !== "playing" && gameState.myPlayerIndex !== 0;
+        const inMpLobbyAsNonHost = gameState.isMultiplayer && gameState.status !== "playing" && gameState.myPlayerIndex !== gameState.hostPlayerIndex;
         const mpDisabled = this.synced.isConverting || inMpLobbyAsNonHost;
         return (
             <>
@@ -2945,7 +2945,7 @@ export class LetterFastGame extends preact.Component {
         const inputCls = css.fontSize(13).pad2(4, 6).width(48) + "";
         const sectionTitle = css.fontSize(12).fontWeight("bold").colorhsl(0, 0, 70) + "";
         const inMP = gameState.isMultiplayer && !!gameState.gameId;
-        const isHost = !inMP || gameState.myPlayerIndex === 0;
+        const isHost = !inMP || gameState.myPlayerIndex === gameState.hostPlayerIndex;
         const hostOnlyTitle = !isHost ? "Only the host can change this" : undefined;
         const hostOnlySuffix = inMP && !isHost ? " (host only)" : "";
         return (
@@ -3073,7 +3073,7 @@ export class LetterFastGame extends preact.Component {
 
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
-                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === gameState.hostPlayerIndex;
                         return (
                             <div className={css.vbox(4)}>
                                 <div className={sectionTitle}>Mode{inMultiplayer && !isHost ? " (host only)" : ""}</div>
@@ -3155,7 +3155,7 @@ export class LetterFastGame extends preact.Component {
 
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
-                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === gameState.hostPlayerIndex;
                         const showRem = this.synced.cfgShowRemaining;
                         const showTot = this.synced.cfgShowTotal;
                         return (

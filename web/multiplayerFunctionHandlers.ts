@@ -307,7 +307,7 @@ const serverHandlers = {
         if (!game) {
             throw new Error(`Game ${gameId} not found`);
         }
-        if (game.players[0] !== player) {
+        if (!GameManager.isPlayerHost(game, player)) {
             throw new Error(`Only the host can start a new game`);
         }
         if (game.status !== "finished") return;
@@ -411,6 +411,7 @@ export const clientHandlers = {
             gameState.elapsedTime = Math.max(0, Date.now() - snapshot.startTime);
         }
         gameState.myPlayerIndex = snapshot.yourPlayerIndex;
+        gameState.hostPlayerIndex = snapshot.hostPlayerIndex;
         gameState.gridWidth = snapshot.gridWidth;
         gameState.gridHeight = snapshot.gridHeight;
         gameState.gameDuration = snapshot.gameDuration;

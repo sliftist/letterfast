@@ -102,7 +102,7 @@ export class GameConfig extends preact.Component {
             showTotalPossibleScore: this.synced.showTotalPossibleScore,
         });
 
-        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === 0) {
+        if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === gameState.hostPlayerIndex) {
             void (async () => {
                 try {
                     const rpc = getRPCClient();
@@ -294,7 +294,7 @@ export class GameConfig extends preact.Component {
 
                     {(() => {
                         const inMultiplayer = gameState.isMultiplayer && !!gameState.gameId;
-                        const isHost = !inMultiplayer || gameState.myPlayerIndex === 0;
+                        const isHost = !inMultiplayer || gameState.myPlayerIndex === gameState.hostPlayerIndex;
                         const showRemainingWordsPerCell = inMultiplayer ? gameState.showRemainingWordsPerCell : this.synced.showRemainingWordsPerCell;
                         const showTotalPossibleScore = inMultiplayer ? gameState.showTotalPossibleScore : this.synced.showTotalPossibleScore;
                         return (

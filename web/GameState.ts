@@ -54,6 +54,8 @@ export interface GameState {
     isMultiplayer: boolean;
     gameId: string | undefined;
     myPlayerIndex: number | undefined;
+    // Index (in players) of the current host — the first connected player. The server recomputes this as players connect/disconnect; only the host may change settings or start games.
+    hostPlayerIndex: number;
     players: MultiplayerPlayer[];
     allWords: Record<string, { word: string; points: number }[]>;
     gameDuration: number;
@@ -187,6 +189,7 @@ export const gameState = observable<GameState>({
     isMultiplayer: false,
     gameId: undefined,
     myPlayerIndex: undefined,
+    hostPlayerIndex: 0,
     players: [],
     allWords: {},
     gameDuration: initialConfig.gameDuration,

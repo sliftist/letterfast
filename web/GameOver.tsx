@@ -295,7 +295,7 @@ class GameOverComponent extends preact.Component<GameOverProps> {
                             ? Math.max(0, Math.ceil((countdownEnd - this.synced.countdownNow) / 1000))
                             : 0;
                         const isCountingDown = countdownEnd > 0 && secondsLeft > 0;
-                        const isHost = gameState.myPlayerIndex === 0;
+                        const isHost = gameState.myPlayerIndex === gameState.hostPlayerIndex;
                         const disabled = !isHost || isCountingDown || this.synced.restartRequesting;
                         const label = isCountingDown ? `New Game in ${secondsLeft}…` : "▶ New Game";
                         return (

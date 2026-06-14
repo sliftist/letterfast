@@ -334,12 +334,27 @@ export function getGame(gameId: string): Game | undefined {
     return games.get(gameId);
 }
 
+// The host is the first CONNECTED player, not whoever happens to be at index 0.
+// A disconnected host (kept in their slot to preserve score) hands host duties
+// to the next connected player, so host actions are always available to someone
+// who's actually present. Falls back to 0 only when everyone is disconnected.
+export function getHostIndex(game: Game): number {
+    for (let i = 0; i < game.players.length; i++) {
+        if (!game.disconnectedPlayers.has(game.players[i])) return i;
+    }
+    return 0;
+}
+
+export function isPlayerHost(game: Game, player: PlayerIdentifier): boolean {
+    return game.players[getHostIndex(game)] === player;
+}
+
 export function validateStartGame(gameId: string, player: PlayerIdentifier): void {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
     }
-    if (game.players[0] !== player) {
+    if (!isPlayerHost(game, player)) {
         throw new Error(`Only the host can start the game`);
     }
 }
@@ -402,7 +417,7 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
     return {
         gameId: game.id,
         status: game.status,
-        hostPlayerIndex: 0,
+        hostPlayerIndex: getHostIndex(game),
         yourPlayerIndex: yourIdx,
         players,
         gridWidth: game.gridWidth,
@@ -627,7 +642,7 @@ export function updateGameSettings(config: {
     if (!game) {
         throw new Error(`Game ${config.gameId} not found`);
     }
-    if (game.players[0] !== config.player) {
+    if (!isPlayerHost(game, config.player)) {
         throw new Error(`Only the host can update game settings`);
     }
 
