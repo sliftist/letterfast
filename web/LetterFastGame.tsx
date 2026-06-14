@@ -2284,7 +2284,7 @@ export class LetterFastGame extends preact.Component {
         return (
             <div className={css.hbox(10).wrap.alignItems("center").fillWidth}>
                 <div className={css.vbox(4)}>
-                    <div className={css.fontSize(28).width(90).textAlign("center")}>
+                    <div className={css.fontSize(28).fontFamily("monospace")}>
                         {isCoop ? formatTime(gameState.elapsedTime) : formatTime(gameState.timeRemaining)}
                     </div>
                     <div className={css.width(90).height(4).hsl(0, 0, 30).borderRadius(2).relative.overflowHidden}>
