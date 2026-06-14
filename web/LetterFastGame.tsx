@@ -63,6 +63,8 @@ const DEMO_HOLD_MS = 900;
 const DEMO_GAP_MS = 600;
 const DEMO_IDLE_RECHECK_MS = 1000;
 const DEMO_FINISHED_TOP_N = 20;
+// Post-game demo: the whole word is shown at once (not traced letter-by-letter) and held this long before moving to the next.
+const DEMO_FINISHED_HOLD_MS = 2200;
 
 function randomGameCode(): string {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -1897,18 +1899,32 @@ export class LetterFastGame extends preact.Component {
             this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
             return;
         }
-        for (let i = 1; i <= path.length; i++) {
-            if (!this.isDemoEligible()) {
-                this.synced.demoCells = [];
-                this.redraw();
-                this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
-                return;
-            }
-            this.synced.demoCells = path.slice(0, i);
+        if (gameState.status === "finished") {
+            // Post-game: reveal the whole word at once and hold it longer, so the missed words are easy to read.
+            this.synced.demoCells = path.slice();
             this.redraw();
-            await new Promise<void>(r => window.setTimeout(r, DEMO_STEP_MS));
+            await new Promise<void>(r => window.setTimeout(r, DEMO_FINISHED_HOLD_MS));
+        } else {
+            // Pre-game hint: trace the word letter-by-letter to teach the swipe.
+            for (let i = 1; i <= path.length; i++) {
+                if (!this.isDemoEligible()) {
+                    this.synced.demoCells = [];
+                    this.redraw();
+                    this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+                    return;
+                }
+                this.synced.demoCells = path.slice(0, i);
+                this.redraw();
+                await new Promise<void>(r => window.setTimeout(r, DEMO_STEP_MS));
+            }
+            await new Promise<void>(r => window.setTimeout(r, DEMO_HOLD_MS));
         }
-        await new Promise<void>(r => window.setTimeout(r, DEMO_HOLD_MS));
+        if (!this.isDemoEligible()) {
+            this.synced.demoCells = [];
+            this.redraw();
+            this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
+            return;
+        }
         this.synced.demoCells = [];
         this.redraw();
         this.scheduleDemoTick(DEMO_GAP_MS);
