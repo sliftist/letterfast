@@ -31,6 +31,10 @@ interface Game {
     gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     timerSeqNum: number;
+    // clientId of the designated host (sticky). The host stays designated
+    // across a brief disconnect (a grace timer reassigns to a connected player
+    // only if they don't come back). Manual transfer also sets this.
+    hostClientId: string;
     // Players who disconnected mid-game. They stay in `players` (removing them would delete their words/score and shift every later player's index); they're actually pruned when the next game starts.
     disconnectedPlayers: Set<PlayerIdentifier>;
     // Timestamp when the game became fully empty (every slot disconnected).
@@ -50,7 +54,7 @@ export interface GameSnapshot {
     status: "waiting" | "playing" | "finished";
     hostPlayerIndex: number;
     yourPlayerIndex: number;
-    players: { id: string; score: number }[];
+    players: { id: string; score: number; connected: boolean }[];
     gridWidth: number;
     gridHeight: number;
     gameDuration: number;
@@ -93,6 +97,7 @@ interface SerializedGame {
     gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     timerSeqNum: number;
+    hostClientId: string;
     emptiedAt?: number;
 }
 
@@ -126,6 +131,7 @@ export function serializeAllGames(): { id: string; data: string }[] {
             gameMode: game.gameMode,
             coopGoalFraction: game.coopGoalFraction,
             timerSeqNum: game.timerSeqNum,
+            hostClientId: game.hostClientId,
             emptiedAt: game.emptiedAt,
         };
         out.push({ id: game.id, data: JSON.stringify(s) });
@@ -169,6 +175,7 @@ export function restoreSerializedGames(rows: { id: string; data: string }[]): { 
             gameMode: s.gameMode,
             coopGoalFraction: s.coopGoalFraction,
             timerSeqNum: s.timerSeqNum,
+            hostClientId: s.hostClientId ?? (s.clientIds[0] ?? ""),
             disconnectedPlayers: new Set(players),
             // Everyone is disconnected after a restart; keep the original empty-timestamp if the game was already empty, otherwise the grace window starts now.
             emptiedAt: s.emptiedAt ?? now,
@@ -226,6 +233,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier, 
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
+        hostClientId: clientId,
         disconnectedPlayers: new Set(),
     };
 
@@ -261,6 +269,7 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         timerSeqNum: 0,
+        hostClientId: clientId,
         disconnectedPlayers: new Set(),
     };
 
@@ -334,19 +343,63 @@ export function getGame(gameId: string): Game | undefined {
     return games.get(gameId);
 }
 
-// The host is the first CONNECTED player, not whoever happens to be at index 0.
-// A disconnected host (kept in their slot to preserve score) hands host duties
-// to the next connected player, so host actions are always available to someone
-// who's actually present. Falls back to 0 only when everyone is disconnected.
+// Resolves the designated host (by sticky clientId) to a slot index. While the
+// host is briefly disconnected they keep the role (a grace timer reassigns only
+// if they don't return — see reassignHostIfDisconnected). If the host is gone
+// from the game entirely, fall back to the first connected player.
 export function getHostIndex(game: Game): number {
-    for (let i = 0; i < game.players.length; i++) {
-        if (!game.disconnectedPlayers.has(game.players[i])) return i;
+    if (game.hostClientId) {
+        const idx = game.clientIds.indexOf(game.hostClientId);
+        if (idx !== -1) return idx;
     }
-    return 0;
+    const firstConnected = game.players.findIndex(p => !game.disconnectedPlayers.has(p));
+    return firstConnected !== -1 ? firstConnected : 0;
 }
 
 export function isPlayerHost(game: Game, player: PlayerIdentifier): boolean {
     return game.players[getHostIndex(game)] === player;
+}
+
+export function isHostConnected(game: Game): boolean {
+    const idx = game.hostClientId ? game.clientIds.indexOf(game.hostClientId) : -1;
+    return idx !== -1 && !game.disconnectedPlayers.has(game.players[idx]);
+}
+
+// Hands the host role to the first connected player when the current host is
+// gone or has been disconnected past the grace window. Returns true when the
+// host actually changed (caller should re-broadcast). No-op while the host is
+// connected, or when there's no connected player to hand off to.
+export function reassignHostIfDisconnected(game: Game): boolean {
+    if (isHostConnected(game)) return false;
+    const firstConnected = game.players.findIndex(p => !game.disconnectedPlayers.has(p));
+    if (firstConnected === -1) return false;
+    const newHostClientId = game.clientIds[firstConnected];
+    if (newHostClientId === game.hostClientId) return false;
+    game.hostClientId = newHostClientId;
+    return true;
+}
+
+// Explicit host handoff (the "make host" button). Throws if the caller isn't
+// the host or the target isn't a valid connected player.
+export function transferHost(gameId: string, fromPlayer: PlayerIdentifier, targetIndex: number): void {
+    const game = games.get(gameId);
+    if (!game) {
+        throw new Error(`Game ${gameId} not found`);
+    }
+    if (!isPlayerHost(game, fromPlayer)) {
+        throw new Error(`Only the host can transfer the host role`);
+    }
+    if (targetIndex < 0 || targetIndex >= game.players.length) {
+        throw new Error(`Invalid target index ${targetIndex} for game with ${game.players.length} players`);
+    }
+    if (game.disconnectedPlayers.has(game.players[targetIndex])) {
+        throw new Error(`Cannot make a disconnected player the host`);
+    }
+    const targetClientId = game.clientIds[targetIndex];
+    if (!targetClientId) {
+        throw new Error(`Target player has no client id and cannot be made host`);
+    }
+    game.hostClientId = targetClientId;
 }
 
 export function validateStartGame(gameId: string, player: PlayerIdentifier): void {
@@ -401,6 +454,7 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
     const players = game.players.map((p, index) => ({
         id: `player${index + 1}`,
         score: game.scores.get(p) || 0,
+        connected: !game.disconnectedPlayers.has(p),
     }));
     const coopMatchedWords: { word: string; points: number; playerIndex: number }[] = [];
     if (game.gameMode === "cooperative") {
@@ -521,13 +575,14 @@ export async function submitWord(config: {
     return { points };
 }
 
-export function getPlayerScores(gameId: string): { id: string; score: number }[] {
+export function getPlayerScores(gameId: string): { id: string; score: number; connected: boolean }[] {
     const game = games.get(gameId);
     if (!game) return [];
 
     return game.players.map((player, index) => ({
         id: `player${index + 1}`,
-        score: game.scores.get(player) || 0
+        score: game.scores.get(player) || 0,
+        connected: !game.disconnectedPlayers.has(player),
     }));
 }
 

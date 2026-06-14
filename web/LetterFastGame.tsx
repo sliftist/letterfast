@@ -2491,7 +2491,7 @@ export class LetterFastGame extends preact.Component {
                 {sorted.map((entry, sortIdx) => {
                     const letter = String.fromCharCode(65 + entry.originalIndex);
                     const isYou = entry.originalIndex === gameState.myPlayerIndex;
-                    const isHost = entry.originalIndex === 0;
+                    const isHost = entry.originalIndex === gameState.hostPlayerIndex;
                     const hue = hueFor(entry.originalIndex, isYou);
                     const isHighlighted = entry.originalIndex === this.synced.highlightPlayerIndex;
                     return (
@@ -3031,6 +3031,37 @@ export class LetterFastGame extends preact.Component {
                     <div className={css.vbox(4)}>
                         {this.renderMenuButtons()}
                     </div>
+
+                    {inMP && isHost && gameState.players.length > 1 && (
+                        <div className={css.vbox(4)}>
+                            <div className={sectionTitle}>Make host</div>
+                            <div className={css.hbox(6).wrap}>
+                                {gameState.players.map((p, index) => {
+                                    if (index === gameState.hostPlayerIndex) return undefined;
+                                    const connected = p.connected !== false;
+                                    const letter = String.fromCharCode(65 + index);
+                                    return (
+                                        <button
+                                            key={p.id || `p-${index}`}
+                                            disabled={!connected}
+                                            title={connected ? `Make player ${letter} the host` : `Player ${letter} is disconnected`}
+                                            onClick={async () => {
+                                                if (!gameState.gameId) return;
+                                                try {
+                                                    await (getRPCClient() as any).transferHost(gameState.gameId, index);
+                                                } catch (error) {
+                                                    console.error("Failed to transfer host:", (error as Error).stack ?? error);
+                                                }
+                                            }}
+                                            className={css.fontSize(13).pad2(4, 8) + (connected ? "" : css.opacity(0.5))}
+                                        >
+                                            {letter}{index === gameState.myPlayerIndex ? " (you)" : ""}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     <div className={css.vbox(4)}>
                         <div className={sectionTitle}>Grid Size (2-10){hostOnlySuffix}</div>

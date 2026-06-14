@@ -116,16 +116,57 @@ interface ChallengeWatcher {
 
 const challengeWatchers = new Map<string, ChallengeWatcher>();
 
+// How long the host can be disconnected before the role is handed to a
+// connected player. Lets the host refresh / briefly drop without losing host.
+const HOST_GRACE_MS = 10000;
+const hostReassignTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+async function broadcastPlayerUpdate(gameId: string): Promise<void> {
+    const game = GameManager.getGame(gameId);
+    if (!game) return;
+    const players = GameManager.getPlayerScores(gameId);
+    await GameManager.broadcastToGame(gameId, async (playerClient, playerIndex) => {
+        await playerClient.onPlayerUpdate(gameId, players, game.status, playerIndex);
+    });
+}
+
+// Ensure the host is a connected player. If the host is currently disconnected,
+// start (or keep) a grace timer; when it fires and the host still hasn't
+// returned, hand the role to a connected player and tell everyone. Connected
+// host → clears any pending timer.
+function maintainHost(gameId: string): void {
+    const game = GameManager.getGame(gameId);
+    if (!game) return;
+    if (GameManager.isHostConnected(game)) {
+        const existing = hostReassignTimers.get(gameId);
+        if (existing) {
+            clearTimeout(existing);
+            hostReassignTimers.delete(gameId);
+        }
+        return;
+    }
+    if (hostReassignTimers.has(gameId)) return;
+    const timer = setTimeout(() => {
+        hostReassignTimers.delete(gameId);
+        const g = GameManager.getGame(gameId);
+        if (!g) return;
+        if (GameManager.reassignHostIfDisconnected(g)) {
+            void broadcastSnapshot(gameId);
+            void broadcastPlayerUpdate(gameId);
+        }
+    }, HOST_GRACE_MS);
+    hostReassignTimers.set(gameId, timer);
+}
+
 function setupPlayerDisconnect(gameId: string, player: GameManager.PlayerIdentifier): void {
     onLastCallerDisconnect(() => {
         GameManager.removePlayerFromGame(gameId, player);
         const game = GameManager.getGame(gameId);
         if (game) {
+            // If the host just dropped, give them HOST_GRACE_MS to come back before reassigning.
+            maintainHost(gameId);
             void broadcastSnapshot(gameId);
-            const players = GameManager.getPlayerScores(gameId);
-            void GameManager.broadcastToGame(gameId, async (playerClient, playerIndex) => {
-                await playerClient.onPlayerUpdate(gameId, players, game.status, playerIndex);
-            });
+            void broadcastPlayerUpdate(gameId);
         }
     });
 }
@@ -187,6 +228,11 @@ const serverHandlers = {
         }
 
         setupPlayerDisconnect(sanitized, player);
+        // After a restart everyone is a disconnected stub, so the designated
+        // host slot is "present" but offline. This gives the original host the
+        // grace window to reconnect; if they don't, the role passes to whoever
+        // did connect.
+        maintainHost(sanitized);
 
         if (game) {
             let gameT = game;
@@ -296,6 +342,16 @@ const serverHandlers = {
         }
 
         return result;
+    },
+
+    async transferHost(gameId: string, targetPlayerIndex: number): Promise<void> {
+        const player = getServerSideClient();
+        if (!player) {
+            throw new Error(`No active caller`);
+        }
+        GameManager.transferHost(gameId, player, targetPlayerIndex);
+        await broadcastSnapshot(gameId);
+        await broadcastPlayerUpdate(gameId);
     },
 
     async requestRestart(gameId: string): Promise<void> {
@@ -442,7 +498,7 @@ export const clientHandlers = {
         }
     },
 
-    async onPlayerUpdate(gameId: string, players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
+    async onPlayerUpdate(gameId: string, players: { id: string; score: number; connected?: boolean }[], status: string, yourPlayerIndex: number): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         gameState.players = players;
@@ -605,7 +661,7 @@ const clientHandlersNoOp: ClientHandlers = {
     async onGameState(snapshot: GameManager.GameSnapshot): Promise<void> {
     },
 
-    async onPlayerUpdate(gameId: string, players: { id: string; score: number }[], status: string, yourPlayerIndex: number): Promise<void> {
+    async onPlayerUpdate(gameId: string, players: { id: string; score: number; connected?: boolean }[], status: string, yourPlayerIndex: number): Promise<void> {
     },
 
     async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {

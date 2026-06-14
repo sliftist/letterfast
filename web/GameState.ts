@@ -29,6 +29,7 @@ export interface GridCell {
 export interface MultiplayerPlayer {
     id: string;
     score: number;
+    connected?: boolean;
 }
 
 export type GameMode = "competitive" | "cooperative" | "competitive-shared";
