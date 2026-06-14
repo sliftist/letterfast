@@ -354,6 +354,29 @@ const serverHandlers = {
         await broadcastPlayerUpdate(gameId);
     },
 
+    async endGameNow(gameId: string): Promise<void> {
+        const player = getServerSideClient();
+        if (!player) {
+            throw new Error(`No active caller`);
+        }
+        const game = GameManager.getGame(gameId);
+        if (!game) {
+            throw new Error(`Game ${gameId} not found`);
+        }
+        if (!GameManager.isPlayerHost(game, player)) {
+            throw new Error(`Only the host can end the game`);
+        }
+        if (game.status !== "playing") return;
+        const allWords = GameManager.getAllWords(gameId);
+        const players = GameManager.getPlayerScores(gameId);
+        // Mark finished before broadcasting the snapshot so it carries the finished status (otherwise a trailing "playing" snapshot would reopen the board and close the game-over modal).
+        GameManager.endGame(gameId);
+        await GameManager.broadcastToGame(gameId, async (client) => {
+            await client.onGameEnd(gameId, players, allWords);
+        });
+        await broadcastSnapshot(gameId);
+    },
+
     async requestRestart(gameId: string): Promise<void> {
         const player = getServerSideClient();
         if (!player) {

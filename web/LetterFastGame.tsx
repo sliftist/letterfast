@@ -341,6 +341,7 @@ export class LetterFastGame extends preact.Component {
         joinPopupOpen: false,
         joinPopupBackdropDown: false,
         menuBackdropDown: false,
+        confirmNewMp: false,
         peerFlashCells: [] as { row: number; col: number; id: number }[],
         blockedFlashCells: [] as { row: number; col: number; id: number }[],
         alreadyFlashCells: [] as { row: number; col: number; id: number }[],
@@ -1448,6 +1449,7 @@ export class LetterFastGame extends preact.Component {
         }
         this.refreshMenuConfig();
         this.synced.menuOpen = true;
+        this.synced.confirmNewMp = false;
         // The textarea is uncontrolled: it picks up its initial value from
         // `defaultValue={this.gridToText(...)}` on mount when the menu opens.
         this.synced.boardImportError = undefined;
@@ -2578,27 +2580,77 @@ export class LetterFastGame extends preact.Component {
         const startMultiplayer = async () => {
             await this.startOrJoinMultiplayer();
         };
+        const endMultiplayerGame = async () => {
+            if (!gameState.gameId) return;
+            try {
+                await (getRPCClient() as any).endGameNow(gameState.gameId);
+            } catch (error) {
+                console.error("Failed to end game:", (error as Error).stack ?? error);
+            }
+        };
         // Non-host restriction only applies in the lobby (starting the shared game needs the host). Mid-game, clicking this spins up a NEW game, which anyone may do.
         const inMpLobbyAsNonHost = gameState.isMultiplayer && gameState.status !== "playing" && gameState.myPlayerIndex !== gameState.hostPlayerIndex;
         const mpDisabled = this.synced.isConverting || inMpLobbyAsNonHost;
+        // Clicking "New Multiplayer Game" while already in a game leaves it — confirm first.
+        const leavingForNewMp = gameState.isMultiplayer && !!gameState.gameId && gameState.status === "playing";
+        const onMultiplayerClick = async () => {
+            if (leavingForNewMp && !this.synced.confirmNewMp) {
+                this.synced.confirmNewMp = true;
+                return;
+            }
+            this.synced.confirmNewMp = false;
+            this.synced.menuOpen = false;
+            await startMultiplayer();
+        };
+        const isMpHost = gameState.isMultiplayer && gameState.myPlayerIndex === gameState.hostPlayerIndex;
         return (
             <>
                 <button onClick={closeAfter(startSingleplayer)} className={btn}>
                     ▶️ Start Singleplayer
                 </button>
                 <button
-                    onClick={closeAfter(startMultiplayer)}
+                    onClick={onMultiplayerClick}
                     disabled={mpDisabled}
                     title={inMpLobbyAsNonHost ? "Only the host can start the game" : undefined}
                     className={btn}
                 >
                     {this.synced.isConverting && "👥 Starting…"
-                        || (gameState.isMultiplayer && gameState.status === "playing") && "👥 New Multiplayer Game"
+                        || leavingForNewMp && "👥 New Multiplayer Game"
                         || "👥 Start Multiplayer"}
                 </button>
+                {this.synced.confirmNewMp && (
+                    <div className={css.vbox(6).pad2(8).borderRadius(6).hsl(0, 40, 18)}>
+                        <div className={css.fontSize(12)}>
+                            Starting a new game will leave your current game.
+                        </div>
+                        <div className={css.hbox(6)}>
+                            <button
+                                onClick={async () => {
+                                    this.synced.confirmNewMp = false;
+                                    this.synced.menuOpen = false;
+                                    await startMultiplayer();
+                                }}
+                                className={css.fontSize(13).pad2(4, 8) + ""}
+                            >
+                                Leave & start new
+                            </button>
+                            <button
+                                onClick={() => { this.synced.confirmNewMp = false; }}
+                                className={css.fontSize(13).pad2(4, 8) + ""}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                )}
                 {gameState.status === "playing" && !gameState.isMultiplayer && (
                     <button onClick={closeAfter(() => endGame())} className={btn}>
                         ⏹️ End Now
+                    </button>
+                )}
+                {gameState.status === "playing" && isMpHost && (
+                    <button onClick={closeAfter(endMultiplayerGame)} className={btn}>
+                        ⏹️ End Game
                     </button>
                 )}
             </>
