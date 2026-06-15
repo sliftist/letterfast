@@ -1764,11 +1764,15 @@ export class LetterFastGame extends preact.Component {
         return gameState.status === "ready" || gameState.status === "finished";
     }
 
+    // Bumped every time scheduleDemoTick / cancelDemoTick is called. Each runDemoCycle captures the token at start and bails on stale, so an in-flight cycle can't race a newly-scheduled one (otherwise two cycles fight over demoCells and words flash past at the wrong rate).
+    demoCycleToken = 0;
+
     cancelDemoTick = () => {
         if (this.demoTimeoutId !== undefined) {
             window.clearTimeout(this.demoTimeoutId);
             this.demoTimeoutId = undefined;
         }
+        this.demoCycleToken++;
         if (this.synced.demoCells.length > 0) {
             this.synced.demoCells = [];
             this.redraw();
@@ -1779,9 +1783,12 @@ export class LetterFastGame extends preact.Component {
         if (this.demoTimeoutId !== undefined) {
             window.clearTimeout(this.demoTimeoutId);
         }
+        this.demoCycleToken++;
+        const myToken = this.demoCycleToken;
         this.demoTimeoutId = window.setTimeout(() => {
             this.demoTimeoutId = undefined;
-            void this.runDemoCycle();
+            if (myToken !== this.demoCycleToken) return;
+            void this.runDemoCycle(myToken);
         }, delay);
     };
 
@@ -1862,7 +1869,8 @@ export class LetterFastGame extends preact.Component {
         this.scheduleDemoTick(150);
     };
 
-    runDemoCycle = async () => {
+    runDemoCycle = async (token: number) => {
+        const stale = () => token !== this.demoCycleToken;
         if (!this.isDemoEligible()) {
             if (this.synced.demoCells.length > 0) {
                 this.synced.demoCells = [];
@@ -1875,9 +1883,11 @@ export class LetterFastGame extends preact.Component {
         try {
             cache = await this.ensureDemoCache();
         } catch {
+            if (stale()) return;
             this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
             return;
         }
+        if (stale()) return;
         if (!cache || !this.isDemoEligible()) {
             this.scheduleDemoTick(DEMO_IDLE_RECHECK_MS);
             return;
@@ -1906,9 +1916,11 @@ export class LetterFastGame extends preact.Component {
             this.synced.demoCells = path.slice();
             this.redraw();
             await new Promise<void>(r => window.setTimeout(r, DEMO_FINISHED_HOLD_MS));
+            if (stale()) return;
         } else {
             // Pre-game hint: trace the word letter-by-letter to teach the swipe.
             for (let i = 1; i <= path.length; i++) {
+                if (stale()) return;
                 if (!this.isDemoEligible()) {
                     this.synced.demoCells = [];
                     this.redraw();
@@ -1918,8 +1930,10 @@ export class LetterFastGame extends preact.Component {
                 this.synced.demoCells = path.slice(0, i);
                 this.redraw();
                 await new Promise<void>(r => window.setTimeout(r, DEMO_STEP_MS));
+                if (stale()) return;
             }
             await new Promise<void>(r => window.setTimeout(r, DEMO_HOLD_MS));
+            if (stale()) return;
         }
         if (!this.isDemoEligible()) {
             this.synced.demoCells = [];
