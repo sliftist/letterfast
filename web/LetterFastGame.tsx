@@ -2343,11 +2343,14 @@ export class LetterFastGame extends preact.Component {
                     }
                     style={{ border: "1px solid rgba(255,255,255,0.15)" }}
                 >
-                    <span className={css.fontSize(20)}>{isCoop ? "🤝" : (showWords ? "📝" : "🏆")}</span>
+                    <span className={css.fontSize(20)}>{showWords ? "📝" : (isCoop ? "🤝" : "🏆")}</span>
                     <span
                         key={`score-${this.synced.scorePulseId}`}
                         className={css.fontSize(20).fontWeight("bold") + " score-pulse"}
                     >{headlineValue}</span>
+                    <span className={css.fontSize(11).colorhsl(0, 0, 65).textTransform("uppercase").letterSpacing("0.5px") + ""}>
+                        {showWords ? "words" : "pts"}
+                    </span>
                     {isCoop && goalPoints > 0 && (
                         <span className={css.vbox(0).alignItems("center")}>
                             <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
