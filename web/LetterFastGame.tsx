@@ -3,7 +3,7 @@ import { css, isNode } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import * as preact from "preact";
 import { Anchor } from "sliftutils/render-utils/Anchor";
-import { joinGameIdURL, challengeURL } from "./Page";
+import { joinGameIdURL, challengeURL, scoreShowsWordsURL } from "./Page";
 import { singleGameURL, encodeSingleGameId, decodeSingleGameId, applySingleGameFromURL, updateSingleGameURL } from "./singlePlayerGames";
 import {
     CELL_SIZE,
@@ -2312,7 +2312,12 @@ export class LetterFastGame extends preact.Component {
         const totalScore = isCoop && gameState.isMultiplayer
             ? gameState.players.reduce((s, p) => s + p.score, 0)
             : gameState.score;
+        // In coop multiplayer matchedWords already contains every player's words, so the count tracks the combined total just like totalScore does.
+        const totalWords = gameState.matchedWords.length;
+        const showWords = scoreShowsWordsURL.value;
+        const headlineValue = showWords ? totalWords : totalScore;
         const goalPoints = isCoop ? Math.max(1, Math.ceil(gameState.totalPossibleScore * gameState.coopGoalFraction)) : 0;
+        // Goal-completion bar always reflects points — the win condition is fixed even when the headline reads as a word count.
         const goalPct = isCoop && goalPoints > 0 ? Math.min(100, (totalScore / goalPoints) * 100) : 0;
         return (
             <div className={css.hbox(10).wrap.alignItems("center").fillWidth}>
@@ -2329,17 +2334,20 @@ export class LetterFastGame extends preact.Component {
                         />
                     </div>
                 </div>
-                <div className={css.hbox(6).alignItems("center").relative
-                    .pad2(4, 10).borderRadius(8)
-                    .hsl(240, 30, 15)
-                }
+                <div
+                    onClick={() => { scoreShowsWordsURL.value = !scoreShowsWordsURL.value; }}
+                    title={showWords ? "Showing word count — tap to show points" : "Showing points — tap to show word count"}
+                    className={css.hbox(6).alignItems("center").relative
+                        .pad2(4, 10).borderRadius(8)
+                        .hsl(240, 30, 15).cursor("pointer")
+                    }
                     style={{ border: "1px solid rgba(255,255,255,0.15)" }}
                 >
-                    <span className={css.fontSize(20)}>{isCoop ? "🤝" : "🏆"}</span>
+                    <span className={css.fontSize(20)}>{isCoop ? "🤝" : (showWords ? "📝" : "🏆")}</span>
                     <span
                         key={`score-${this.synced.scorePulseId}`}
                         className={css.fontSize(20).fontWeight("bold") + " score-pulse"}
-                    >{totalScore}</span>
+                    >{headlineValue}</span>
                     {isCoop && goalPoints > 0 && (
                         <span className={css.vbox(0).alignItems("center")}>
                             <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
@@ -2350,9 +2358,9 @@ export class LetterFastGame extends preact.Component {
                             </span>
                         </span>
                     )}
-                    {!isCoop && gameState.showTotalPossibleScore && gameState.totalPossibleScore > 0 && (
+                    {!isCoop && gameState.showTotalPossibleScore && (showWords ? gameState.totalPossibleWords > 0 : gameState.totalPossibleScore > 0) && (
                         <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
-                            / {gameState.totalPossibleScore}
+                            / {showWords ? gameState.totalPossibleWords : gameState.totalPossibleScore}
                         </span>
                     )}
                     {this.synced.floatingScores.map(fs => (

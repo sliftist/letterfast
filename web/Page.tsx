@@ -9,6 +9,8 @@ import { ErrorToast } from "./ErrorToast";
 
 export const pageURL = new URLParam("page", "game");
 export const joinGameIdURL = new URLParam("join", "");
+// When true the top score readout shows the matched-word count instead of points. Persists in the URL so a refresh keeps the user's preference.
+export const scoreShowsWordsURL = new URLParam("sw", false);
 export const challengeURL = new URLParam<{
     grid: GridCell[][];
     challengerWords: { word: string; points: number }[];
