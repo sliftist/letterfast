@@ -64,7 +64,7 @@ const DEMO_GAP_MS = 600;
 const DEMO_IDLE_RECHECK_MS = 1000;
 const DEMO_FINISHED_TOP_N = 20;
 // Post-game demo: the whole word is shown at once (not traced letter-by-letter) and held this long before moving to the next.
-const DEMO_FINISHED_HOLD_MS = 5500;
+const DEMO_FINISHED_HOLD_MS = 3850;
 
 function randomGameCode(): string {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
