@@ -65,6 +65,8 @@ const DEMO_IDLE_RECHECK_MS = 1000;
 const DEMO_FINISHED_TOP_N = 20;
 // Post-game demo: the whole word is shown at once (not traced letter-by-letter) and held this long before moving to the next.
 const DEMO_FINISHED_HOLD_MS = 3850;
+// Two-consonant runs (y treated as a consonant) that appear in more than 100 distinct words of cel_2-45.txt. Sorted by frequency, most common first.
+const COMMON_CONSONANT_PAIRS = "ng st nt rs ns tr ll nd ch ts ly ss pr nc th sh bl ct rt ck sc cr sp mp pl gr tt ph ty ds ls rd rm cl rr br ry pp fl rc gl sm rn sl ps mm dr gh mb ff pt ks lt tl rg nf fr nn gs ys hy rb ht ms nk dl ld rp rk gg gn sy tc hr bs rl cc sn nv dd sk rv yp wh ft cs sw bb cy wn ym xt rf gy dg xp ws tw hs yc kl yn dy nl wr lk ny fy rh yl hl lm py my tm kn nr yt lv sq lc nh nb nm lf np fs lp rw zz wl xc ky dm yd tb hm db gm tf yb hn by yr lb dw";
 
 function randomGameCode(): string {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -325,6 +327,7 @@ export class LetterFastGame extends preact.Component {
         isConverting: false,
         reconnectCountdown: 0,
         menuOpen: false,
+        consonantPairsOpen: false,
         cfgWidth: 4,
         cfgHeight: 4,
         cfgDuration: 90000,
@@ -3373,6 +3376,25 @@ export class LetterFastGame extends preact.Component {
                     >
                         Copy settings from last game
                     </button>
+
+                    <div className={css.vbox(4)}>
+                        <button
+                            onClick={() => { this.synced.consonantPairsOpen = !this.synced.consonantPairsOpen; }}
+                            title="Two-consonant runs that appear in more than 100 words of the dictionary"
+                            className={css.fontSize(13).pad2(6, 10).textAlign("left") + ""}
+                        >
+                            {this.synced.consonantPairsOpen ? "▾" : "▸"} Common consonant pairs
+                        </button>
+                        {this.synced.consonantPairsOpen && (
+                            <div
+                                className={css.fontSize(12).fontFamily("monospace").colorhsl(0, 0, 85)
+                                    .hsl(240, 30, 8).borderRadius(6).pad2(8, 10) + ""}
+                                style={{ wordBreak: "break-word", lineHeight: 1.5 }}
+                            >
+                                {COMMON_CONSONANT_PAIRS}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         );
