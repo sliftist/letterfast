@@ -2356,17 +2356,39 @@ export class LetterFastGame extends preact.Component {
                     </span>
                     {isCoop && goalPoints > 0 && (
                         <span className={css.vbox(0).alignItems("center")}>
+                            {showWords && gameState.totalPossibleWords > 0 && (
+                                <>
+                                    <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                                        / {gameState.totalPossibleWords} <span className={css.fontSize(9).opacity(0.7) + ""}>wds</span>
+                                    </span>
+                                    <span style={{ alignSelf: "stretch", height: 1, background: "rgba(255,255,255,0.35)", margin: "2px 0" }} />
+                                </>
+                            )}
                             <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
-                                / {goalPoints}
+                                / {goalPoints}{showWords && <span className={css.fontSize(9).opacity(0.7) + ""}> pts</span>}
                             </span>
                             <span className={css.fontSize(10).colorhsl(200, 60, 65) + ""} style={{ marginTop: "-2px" }}>
                                 {Math.round(gameState.coopGoalFraction * 100)}% goal
                             </span>
                         </span>
                     )}
-                    {!isCoop && gameState.showTotalPossibleScore && (showWords ? gameState.totalPossibleWords > 0 : gameState.totalPossibleScore > 0) && (
-                        <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
-                            / {showWords ? gameState.totalPossibleWords : gameState.totalPossibleScore}
+                    {!isCoop && gameState.showTotalPossibleScore && (gameState.totalPossibleScore > 0 || (showWords && gameState.totalPossibleWords > 0)) && (
+                        <span className={css.vbox(0).alignItems("center")}>
+                            {showWords && gameState.totalPossibleWords > 0 && (
+                                <>
+                                    <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                                        / {gameState.totalPossibleWords} <span className={css.fontSize(9).opacity(0.7) + ""}>wds</span>
+                                    </span>
+                                    {gameState.totalPossibleScore > 0 && (
+                                        <span style={{ alignSelf: "stretch", height: 1, background: "rgba(255,255,255,0.35)", margin: "2px 0" }} />
+                                    )}
+                                </>
+                            )}
+                            {gameState.totalPossibleScore > 0 && (
+                                <span className={css.fontSize(13).colorhsl(0, 0, 70) + ""}>
+                                    / {gameState.totalPossibleScore}{showWords && <span className={css.fontSize(9).opacity(0.7) + ""}> pts</span>}
+                                </span>
+                            )}
                         </span>
                     )}
                     {this.synced.floatingScores.map(fs => (
