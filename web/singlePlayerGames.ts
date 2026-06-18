@@ -1,6 +1,6 @@
 import { URLParam } from "sliftutils/render-utils/URLParam";
 import { isNode } from "typesafecss";
-import { gameState, GridCell, LETTER_POINTS, GameMode, ensureCellToWordsForGrid, GAME_DURATION, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION } from "./GameState";
+import { gameState, GridCell, LETTER_POINTS, GameMode, ensureCellToWordsForGrid, GAME_DURATION, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION, WordLengthMode, DEFAULT_WORD_LENGTH_MODE, applySettings } from "./GameState";
 import { findAllWordsInGrid, getWordTrie, calculateTotalScoreForWords } from "./GridGenerator";
 
 // Single-player games are identified by a compact URL param that custom-encodes the game config. The id alone recreates the board, so sharing the URL shares the game. Per-id progress (words, score, elapsed time, status) lives in the origin-private file system, one file per game keyed by a hash of the id — reloading resumes your game, while someone else opening your link gets the same board fresh.
@@ -13,6 +13,10 @@ import { findAllWordsInGrid, getWordTrie, calculateTotalScoreForWords } from "./
 //   .d<s>   DURATION       seconds; omitted when default
 //   .g<c>   MODE           "r"=competitive, "s"=competitive-shared; cooperative (default) omitted
 //   .p<n>   COOP GOAL      percent; omitted when default (only meaningful for cooperative)
+//   .w<c>   WORD LENGTH    "f"=min4, "t"=exactly3; "any" (default) omitted
+//   .l<n>   SCORE MIN      regen-floor used during generation; omitted when unset
+//   .h<n>   SCORE MAX      regen-ceiling used during generation; omitted when unset
+//   .c1     VOWEL CENTER 4 only in 4x4 grids; omitted when off
 // The leading char is always a letter so sliftutils' niceStringify stores it
 // verbatim (a leading digit would get JSON-quoted).
 
@@ -31,6 +35,10 @@ export interface SingleGameConfig {
     gameDuration: number;
     gameMode: GameMode;
     coopGoalFraction: number;
+    wordLengthMode: WordLengthMode;
+    targetScoreMin: number | undefined;
+    targetScoreMax: number | undefined;
+    vowelCenter4: boolean;
 }
 
 export interface SingleGameProgress {
@@ -66,6 +74,13 @@ export function encodeSingleGameId(config: SingleGameConfig): string {
         if (pct !== DEFAULT_COOP_GOAL_PERCENT) out += ".p" + pct;
     }
 
+    if (config.wordLengthMode === "min4") out += ".wf";
+    else if (config.wordLengthMode === "exactly3") out += ".wt";
+
+    if (config.targetScoreMin && config.targetScoreMin > 0) out += ".l" + Math.floor(config.targetScoreMin);
+    if (config.targetScoreMax && config.targetScoreMax > 0) out += ".h" + Math.floor(config.targetScoreMax);
+    if (config.vowelCenter4) out += ".c1";
+
     return out;
 }
 
@@ -83,6 +98,10 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
     let gameDuration = GAME_DURATION;
     let gameMode: GameMode = DEFAULT_GAME_MODE;
     let coopGoalFraction = DEFAULT_COOP_GOAL_FRACTION;
+    let wordLengthMode: WordLengthMode = DEFAULT_WORD_LENGTH_MODE;
+    let targetScoreMin: number | undefined;
+    let targetScoreMax: number | undefined;
+    let vowelCenter4 = false;
     const multipliers = new Map<number, 2 | 3>();
 
     for (let i = 2; i < segs.length; i++) {
@@ -107,6 +126,17 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
         } else if (key === "p") {
             const pct = parseInt(data, 10);
             if (pct >= 5 && pct <= 100) coopGoalFraction = pct / 100;
+        } else if (key === "w") {
+            if (data === "f") wordLengthMode = "min4";
+            else if (data === "t") wordLengthMode = "exactly3";
+        } else if (key === "l") {
+            const n = parseInt(data, 10);
+            if (Number.isInteger(n) && n > 0) targetScoreMin = n;
+        } else if (key === "h") {
+            const n = parseInt(data, 10);
+            if (Number.isInteger(n) && n > 0) targetScoreMax = n;
+        } else if (key === "c") {
+            vowelCenter4 = data === "1";
         }
     }
 
@@ -124,7 +154,7 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
         }
         grid.push(row);
     }
-    return { grid, gameDuration, gameMode, coopGoalFraction };
+    return { grid, gameDuration, gameMode, coopGoalFraction, wordLengthMode, targetScoreMin, targetScoreMax, vowelCenter4 };
 }
 
 // Recomputes the id from the live game and puts it in the URL. Called whenever a new single-player board comes into existence (new game, grid resize, board import).
@@ -137,6 +167,10 @@ export function updateSingleGameURL(): void {
         gameDuration: gameState.gameDuration,
         gameMode: gameState.gameMode,
         coopGoalFraction: gameState.coopGoalFraction,
+        wordLengthMode: gameState.wordLengthMode,
+        targetScoreMin: gameState.targetScoreMin,
+        targetScoreMax: gameState.targetScoreMax,
+        vowelCenter4: gameState.vowelCenter4,
     });
 }
 
@@ -151,13 +185,18 @@ export async function applySingleGameFromURL(): Promise<boolean> {
     }
 
     const trie = await getWordTrie();
-    const result = findAllWordsInGrid(config.grid, trie);
+    const result = findAllWordsInGrid(config.grid, trie, config.wordLengthMode);
     gameState.gridWidth = config.grid[0].length;
     gameState.gridHeight = config.grid.length;
     gameState.grid = config.grid;
     gameState.gameDuration = config.gameDuration;
     gameState.gameMode = config.gameMode;
     gameState.coopGoalFraction = config.coopGoalFraction;
+    // Direct assignment (not applySettings) — undefined values from the URL must override any stale state from a prior game.
+    gameState.wordLengthMode = config.wordLengthMode;
+    gameState.targetScoreMin = config.targetScoreMin;
+    gameState.targetScoreMax = config.targetScoreMax;
+    gameState.vowelCenter4 = config.vowelCenter4;
     gameState.totalPossibleWords = result.words.size;
     gameState.totalPossibleScore = calculateTotalScoreForWords(config.grid, result.words, trie);
     gameState.status = "ready";

@@ -2,7 +2,7 @@ import preact from "preact";
 import { css } from "typesafecss";
 import { observer } from "sliftutils/render-utils/observer";
 import { pageURL, joinGameIdURL } from "./Page";
-import { changeGridSize, getCurrentGridSize, gameState, applySettings, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION } from "./GameState";
+import { changeGridSize, getCurrentGridSize, gameState, applySettings, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION, WordLengthMode, DEFAULT_WORD_LENGTH_MODE } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
 
@@ -19,6 +19,13 @@ export interface SavedConfig {
     /** When true, drawing a word picks the highest-scoring path for that
      *  word automatically, ignoring which exact cells the user traced. */
     autoBestPath?: boolean;
+    wordLengthMode?: WordLengthMode;
+    /** When set, the grid generator retries up to 20 times to keep the total
+     *  possible score within these bounds. Undefined / 0 disables that bound. */
+    targetScoreMin?: number;
+    targetScoreMax?: number;
+    /** 4x4 only: force the four center cells to vowels. */
+    vowelCenter4?: boolean;
 }
 
 export function loadSavedConfig(): SavedConfig | undefined {
@@ -43,6 +50,13 @@ export function loadSavedConfig(): SavedConfig | undefined {
                 coopGoalFraction: typeof config.coopGoalFraction === "number" && config.coopGoalFraction > 0 && config.coopGoalFraction <= 1
                     ? config.coopGoalFraction : DEFAULT_COOP_GOAL_FRACTION,
                 autoBestPath: config.autoBestPath !== false,
+                wordLengthMode: config.wordLengthMode === "min4" || config.wordLengthMode === "exactly3"
+                    ? config.wordLengthMode : DEFAULT_WORD_LENGTH_MODE,
+                targetScoreMin: typeof config.targetScoreMin === "number" && config.targetScoreMin > 0
+                    ? Math.floor(config.targetScoreMin) : undefined,
+                targetScoreMax: typeof config.targetScoreMax === "number" && config.targetScoreMax > 0
+                    ? Math.floor(config.targetScoreMax) : undefined,
+                vowelCenter4: !!config.vowelCenter4,
             };
         }
     } catch (error) {
@@ -71,6 +85,10 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         autoBestPath: true,
+        wordLengthMode: DEFAULT_WORD_LENGTH_MODE,
+        targetScoreMin: undefined,
+        targetScoreMax: undefined,
+        vowelCenter4: false,
     };
 }
 

@@ -20,6 +20,20 @@ export const DEFAULT_COOP_GOAL_FRACTION = 0.25;
 export const MIN_VOWEL_FRACTION = 0.20;
 export const MAX_VOWEL_FRACTION = 0.45;
 
+// Per-game word-length filter. "any" accepts everything ≥3 (existing floor); "min4" only accepts 4+ letters; "exactly3" only accepts exactly 3 letters. The mode is honored by every word check — submission, voice find, and the grid generator's totalPossibleScore — so the coop goal and shown totals reflect the filter.
+export type WordLengthMode = "any" | "min4" | "exactly3";
+export const DEFAULT_WORD_LENGTH_MODE: WordLengthMode = "any";
+
+export function isWordLengthAllowed(wordLen: number, mode: WordLengthMode | undefined): boolean {
+    if (wordLen < 3) return false;
+    if (mode === "min4") return wordLen >= 4;
+    if (mode === "exactly3") return wordLen === 3;
+    return true;
+}
+
+// Max grid-generation retries when targetScoreMin/Max is set. Caps the work the optimizer does so a configuration that can't be satisfied (e.g. min > max) still terminates promptly.
+export const GRID_RETRY_LIMIT = 20;
+
 export interface GridCell {
     letter: string;
     points: number;
@@ -88,6 +102,11 @@ export interface GameState {
      *  playing past the target (the goal indicator stays visible as a
      *  milestone). Cleared at the start of any new game. */
     coopInfinite: boolean;
+    wordLengthMode: WordLengthMode;
+    targetScoreMin?: number;
+    targetScoreMax?: number;
+    /** When true, the four center cells of a 4x4 grid are forced to vowels and locked from the optimizer's swap loop. No effect on other grid sizes. */
+    vowelCenter4: boolean;
     peerFlashRequest?: { id: number; cells: { row: number; col: number }[]; playerIndex: number };
     lastGameOverState?: GameOverState;
     lastGameOverOnPlayAgain?: () => void;
@@ -160,13 +179,18 @@ export async function ensureCellToWordsForGrid(grid: GridCell[][]): Promise<void
     if (cellToWordsFingerprint === fp && gameState.cellToWords.size > 0) return;
     const trie = await getWordTrie();
     if (gameState.grid !== grid && gridLetterFingerprint(gameState.grid) !== fp) return;
-    gameState.cellToWords = buildCellToWords(grid, trie);
+    gameState.cellToWords = buildCellToWords(grid, trie, gameState.wordLengthMode);
     cellToWordsFingerprint = fp;
 }
 
 async function generateGrid(): Promise<GridCell[][]> {
     let seed = Date.now();
-    let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight);
+    let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight, {
+        wordLengthMode: gameState.wordLengthMode,
+        targetScoreMin: gameState.targetScoreMin,
+        targetScoreMax: gameState.targetScoreMax,
+        vowelCenter4: gameState.vowelCenter4,
+    });
     gameState.totalPossibleWords = result.totalPossibleWords;
     gameState.totalPossibleScore = result.totalPossibleScore;
     gameState.cellToWords = result.cellToWords;
@@ -211,6 +235,10 @@ export const gameState = observable<GameState>({
     gameMode: (initialConfig as any).gameMode || DEFAULT_GAME_MODE,
     coopGoalFraction: (initialConfig as any).coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION,
     coopInfinite: false,
+    wordLengthMode: (initialConfig as any).wordLengthMode || DEFAULT_WORD_LENGTH_MODE,
+    targetScoreMin: (initialConfig as any).targetScoreMin,
+    targetScoreMax: (initialConfig as any).targetScoreMax,
+    vowelCenter4: !!(initialConfig as any).vowelCenter4,
     peerFlashRequest: undefined,
     lastGameOverState: undefined,
     lastGameOverOnPlayAgain: undefined,
@@ -221,6 +249,10 @@ export function applySettings(settings: {
     showTotalPossibleScore?: boolean;
     gameMode?: GameMode;
     coopGoalFraction?: number;
+    wordLengthMode?: WordLengthMode;
+    targetScoreMin?: number;
+    targetScoreMax?: number;
+    vowelCenter4?: boolean;
 }) {
     if (settings.showRemainingWordsPerCell !== undefined) {
         gameState.showRemainingWordsPerCell = settings.showRemainingWordsPerCell;
@@ -233,6 +265,18 @@ export function applySettings(settings: {
     }
     if (settings.coopGoalFraction !== undefined) {
         gameState.coopGoalFraction = Math.max(0.05, Math.min(1, settings.coopGoalFraction));
+    }
+    if (settings.wordLengthMode !== undefined) {
+        gameState.wordLengthMode = settings.wordLengthMode;
+    }
+    if (settings.targetScoreMin !== undefined) {
+        gameState.targetScoreMin = settings.targetScoreMin > 0 ? settings.targetScoreMin : undefined;
+    }
+    if (settings.targetScoreMax !== undefined) {
+        gameState.targetScoreMax = settings.targetScoreMax > 0 ? settings.targetScoreMax : undefined;
+    }
+    if (settings.vowelCenter4 !== undefined) {
+        gameState.vowelCenter4 = settings.vowelCenter4;
     }
 }
 

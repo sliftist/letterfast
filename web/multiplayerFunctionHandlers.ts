@@ -1,5 +1,5 @@
 import { createRPC } from "./rpc/createRPC";
-import { GridCell, gameState, GameOverState, regenerateGridForCurrentSize, ensureCellToWordsForGrid } from "./GameState";
+import { GridCell, gameState, GameOverState, regenerateGridForCurrentSize, ensureCellToWordsForGrid, WordLengthMode, applySettings } from "./GameState";
 import * as GameManager from "./GameManager";
 import { onLastCallerDisconnect, getLastFunctionCaller, disconnectLastCaller } from "./rpc/FunctionCaller";
 import { pageURL } from "./Page";
@@ -393,21 +393,21 @@ const serverHandlers = {
         scheduleRestart(gameId);
     },
 
-    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number): Promise<void> {
+    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
         const player = getServerSideClient();
         if (!player) {
             throw new Error(`No active caller`);
         }
 
-        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore, gameMode, coopGoalFraction });
+        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore, gameMode, coopGoalFraction, wordLengthMode, targetScoreMin, targetScoreMax, vowelCenter4 });
         const settings = GameManager.getGameSettings(gameId);
         void GameManager.broadcastToGame(gameId, async (client) => {
-            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore, settings.gameMode, settings.coopGoalFraction);
+            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore, settings.gameMode, settings.coopGoalFraction, settings.wordLengthMode, settings.targetScoreMin, settings.targetScoreMax, settings.vowelCenter4);
         });
         void broadcastSnapshot(gameId);
     },
 
-    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number }> {
+    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number; wordLengthMode: WordLengthMode; targetScoreMin: number | undefined; targetScoreMax: number | undefined; vowelCenter4: boolean }> {
         return GameManager.getGameSettings(gameId);
     },
 
@@ -498,6 +498,10 @@ export const clientHandlers = {
         gameState.coopGoalFraction = snapshot.coopGoalFraction;
         gameState.showRemainingWordsPerCell = snapshot.showRemainingWordsPerCell;
         gameState.showTotalPossibleScore = snapshot.showTotalPossibleScore;
+        gameState.wordLengthMode = snapshot.wordLengthMode;
+        gameState.targetScoreMin = snapshot.targetScoreMin;
+        gameState.targetScoreMax = snapshot.targetScoreMax;
+        gameState.vowelCenter4 = snapshot.vowelCenter4;
         gameState.totalPossibleWords = snapshot.totalPossibleWords;
         gameState.totalPossibleScore = snapshot.totalPossibleScore;
         if (snapshot.grid && snapshot.grid.length > 0) {
@@ -618,30 +622,32 @@ export const clientHandlers = {
         gameState.restartCountdownEnd = endTime;
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
-        const dimensionsChanged = gameState.gridWidth !== gridWidth || gameState.gridHeight !== gridHeight;
+        const generationParamsChanged =
+            gameState.gridWidth !== gridWidth
+            || gameState.gridHeight !== gridHeight
+            || (wordLengthMode !== undefined && gameState.wordLengthMode !== wordLengthMode)
+            || (targetScoreMin !== undefined && gameState.targetScoreMin !== (targetScoreMin > 0 ? targetScoreMin : undefined))
+            || (targetScoreMax !== undefined && gameState.targetScoreMax !== (targetScoreMax > 0 ? targetScoreMax : undefined))
+            || (vowelCenter4 !== undefined && gameState.vowelCenter4 !== !!vowelCenter4);
         gameState.gridWidth = gridWidth;
         gameState.gridHeight = gridHeight;
         gameState.gameDuration = gameDuration;
-        if (showRemainingWordsPerCell !== undefined) {
-            gameState.showRemainingWordsPerCell = !!showRemainingWordsPerCell;
-        }
-        if (showTotalPossibleScore !== undefined) {
-            gameState.showTotalPossibleScore = !!showTotalPossibleScore;
-        }
-        if (gameMode !== undefined) {
-            gameState.gameMode = gameMode === "cooperative" || gameMode === "competitive-shared"
-                ? gameMode
-                : "competitive";
-        }
-        if (coopGoalFraction !== undefined) {
-            gameState.coopGoalFraction = Math.max(0.05, Math.min(1, coopGoalFraction));
-        }
+        applySettings({
+            showRemainingWordsPerCell,
+            showTotalPossibleScore,
+            gameMode,
+            coopGoalFraction,
+            wordLengthMode,
+            targetScoreMin,
+            targetScoreMax,
+            vowelCenter4,
+        });
         if (gameState.status !== "playing") {
             gameState.timeRemaining = gameDuration;
-            if (dimensionsChanged) {
+            if (generationParamsChanged) {
                 await regenerateGridForCurrentSize();
             }
         }
@@ -693,7 +699,7 @@ const clientHandlersNoOp: ClientHandlers = {
     async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>, coopWinningWord?: { word: string; points: number; playerIndex: number }): Promise<void> {
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
     },
 
     async onCoopWord(gameId: string, word: string, points: number, playerIndex: number, cells?: { row: number; col: number }[]): Promise<void> {

@@ -28,6 +28,7 @@ import {
     DEFAULT_GAME_MODE,
     DEFAULT_COOP_GOAL_FRACTION,
     LETTER_POINTS,
+    isWordLengthAllowed,
 } from "./GameState";
 import { findPathsForWord, findAllWordsInGrid, getWordTrie } from "./GridGenerator";
 import { getClientId } from "./ClientId";
@@ -338,6 +339,10 @@ export class LetterFastGame extends preact.Component {
         cfgGameMode: DEFAULT_GAME_MODE as "competitive" | "cooperative" | "competitive-shared",
         cfgCoopGoalPct: Math.round(DEFAULT_COOP_GOAL_FRACTION * 100),
         cfgCoopGoalPctStr: String(Math.round(DEFAULT_COOP_GOAL_FRACTION * 100)),
+        cfgWordLengthMode: "any" as "any" | "min4" | "exactly3",
+        cfgTargetScoreMinStr: "",
+        cfgTargetScoreMaxStr: "",
+        cfgVowelCenter4: false,
         joinGameId: randomGameCode(),
         joining: false,
         menuError: undefined as string | undefined,
@@ -485,6 +490,8 @@ export class LetterFastGame extends preact.Component {
         if (options?.autoStart && gameState.status !== "waiting") return;
         try {
             const rpc = getRPCClient();
+            const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
+            const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
             await (rpc as any).updateGameSettings(
                 gameState.gameId,
                 this.synced.cfgWidth,
@@ -494,6 +501,10 @@ export class LetterFastGame extends preact.Component {
                 this.synced.cfgShowTotal,
                 this.synced.cfgGameMode,
                 this.synced.cfgCoopGoalPct / 100,
+                this.synced.cfgWordLengthMode,
+                Number.isFinite(targetMin) && targetMin > 0 ? targetMin : 0,
+                Number.isFinite(targetMax) && targetMax > 0 ? targetMax : 0,
+                this.synced.cfgVowelCenter4,
             );
             await rpc.startGame(gameState.gameId);
         } catch (error) {
@@ -815,7 +826,7 @@ export class LetterFastGame extends preact.Component {
             if (oldTok) this.undoTokenPlay(oldTok);
             const token: VoiceToken = {
                 word: newWord,
-                status: newWord.length < 3 ? "not-word" : "pending",
+                status: !isWordLengthAllowed(newWord.length, gameState.wordLengthMode) ? "not-word" : "pending",
             };
             if (idx < tokens.length) tokens[idx] = token;
             else tokens.push(token);
@@ -884,7 +895,7 @@ export class LetterFastGame extends preact.Component {
         // matchedWordsSet. Longer first feels more natural visually.
         boardWords.sort((a, b) => b.length - a.length);
         for (const cand of boardWords) {
-            if (cand.length < 3) continue;
+            if (!isWordLengthAllowed(cand.length, gameState.wordLengthMode)) continue;
             if (gameState.matchedWordsSet.has(cand.toUpperCase())) continue;
             if (!buf.includes(cand)) continue;
             const r = await this.attemptWord(cand, wordSet);
@@ -968,7 +979,7 @@ export class LetterFastGame extends preact.Component {
         word: string,
         wordSet: Set<string>,
     ): Promise<AttemptResult> => {
-        if (word.length < 3) return { status: "not-word" };
+        if (!isWordLengthAllowed(word.length, gameState.wordLengthMode)) return { status: "not-word" };
         if (!wordSet.has(word.toLowerCase())) return { status: "not-word" };
         const upper = word.toUpperCase();
         const paths = findPathsForWord(gameState.grid, upper);
@@ -991,7 +1002,7 @@ export class LetterFastGame extends preact.Component {
         };
 
         if (!this.synced.voiceModeOn) { console.log("[voice] skip", word, "(voice off)"); set("skipped"); return; }
-        if (word.length < 3) { set("not-word"); return; }
+        if (!isWordLengthAllowed(word.length, gameState.wordLengthMode)) { set("not-word"); return; }
 
         const wordSet = await getWordSet();
 
@@ -1344,6 +1355,10 @@ export class LetterFastGame extends preact.Component {
     };
 
     saveMenuConfig = () => {
+        const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
+        const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
+        const targetScoreMin = Number.isFinite(targetMin) && targetMin > 0 ? targetMin : undefined;
+        const targetScoreMax = Number.isFinite(targetMax) && targetMax > 0 ? targetMax : undefined;
         saveConfig({
             gridWidth: this.synced.cfgWidth,
             gridHeight: this.synced.cfgHeight,
@@ -1353,12 +1368,21 @@ export class LetterFastGame extends preact.Component {
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
             autoBestPath: this.synced.cfgAutoBestPath,
+            wordLengthMode: this.synced.cfgWordLengthMode,
+            targetScoreMin,
+            targetScoreMax,
+            vowelCenter4: this.synced.cfgVowelCenter4,
         });
         applySettings({
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
             showTotalPossibleScore: this.synced.cfgShowTotal,
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
+            wordLengthMode: this.synced.cfgWordLengthMode,
+            // Pass 0 for "unset" so applySettings clears any prior value (rather than ignoring undefined).
+            targetScoreMin: targetScoreMin ?? 0,
+            targetScoreMax: targetScoreMax ?? 0,
+            vowelCenter4: this.synced.cfgVowelCenter4,
         });
         if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === gameState.hostPlayerIndex) {
             void (async () => {
@@ -1373,6 +1397,10 @@ export class LetterFastGame extends preact.Component {
                         this.synced.cfgShowTotal,
                         this.synced.cfgGameMode,
                         this.synced.cfgCoopGoalPct / 100,
+                        this.synced.cfgWordLengthMode,
+                        targetScoreMin ?? 0,
+                        targetScoreMax ?? 0,
+                        this.synced.cfgVowelCenter4,
                     );
                 } catch (error) {
                     console.error("Failed to push settings to server:", error);
@@ -1390,11 +1418,17 @@ export class LetterFastGame extends preact.Component {
         gameState.gridWidth = w;
         gameState.gridHeight = h;
         gameState.gameDuration = this.synced.cfgDuration;
+        const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
+        const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
         applySettings({
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
             showTotalPossibleScore: this.synced.cfgShowTotal,
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
+            wordLengthMode: this.synced.cfgWordLengthMode,
+            targetScoreMin: Number.isFinite(targetMin) && targetMin > 0 ? targetMin : 0,
+            targetScoreMax: Number.isFinite(targetMax) && targetMax > 0 ? targetMax : 0,
+            vowelCenter4: this.synced.cfgVowelCenter4,
         });
         await startGame();
     };
@@ -1414,6 +1448,10 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgShowTotal = gameState.showTotalPossibleScore;
             this.synced.cfgGameMode = gameState.gameMode;
             this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
+            this.synced.cfgWordLengthMode = gameState.wordLengthMode;
+            this.synced.cfgTargetScoreMinStr = gameState.targetScoreMin ? String(gameState.targetScoreMin) : "";
+            this.synced.cfgTargetScoreMaxStr = gameState.targetScoreMax ? String(gameState.targetScoreMax) : "";
+            this.synced.cfgVowelCenter4 = gameState.vowelCenter4;
         } else if (saved) {
             this.synced.cfgWidth = saved.gridWidth;
             this.synced.cfgHeight = saved.gridHeight;
@@ -1422,6 +1460,10 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgShowTotal = !!saved.showTotalPossibleScore;
             this.synced.cfgGameMode = saved.gameMode ?? DEFAULT_GAME_MODE;
             this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION) * 100);
+            this.synced.cfgWordLengthMode = saved.wordLengthMode ?? "any";
+            this.synced.cfgTargetScoreMinStr = saved.targetScoreMin ? String(saved.targetScoreMin) : "";
+            this.synced.cfgTargetScoreMaxStr = saved.targetScoreMax ? String(saved.targetScoreMax) : "";
+            this.synced.cfgVowelCenter4 = !!saved.vowelCenter4;
         }
         // autoBestPath is a client-side preference, never part of a game's shared state — always from saved prefs.
         this.synced.cfgAutoBestPath = saved ? saved.autoBestPath !== false : true;
@@ -1442,6 +1484,10 @@ export class LetterFastGame extends preact.Component {
         this.synced.cfgGameMode = gameState.gameMode;
         this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
         this.synced.cfgCoopGoalPctStr = String(Math.round(gameState.coopGoalFraction * 100));
+        this.synced.cfgWordLengthMode = gameState.wordLengthMode;
+        this.synced.cfgTargetScoreMinStr = gameState.targetScoreMin ? String(gameState.targetScoreMin) : "";
+        this.synced.cfgTargetScoreMaxStr = gameState.targetScoreMax ? String(gameState.targetScoreMax) : "";
+        this.synced.cfgVowelCenter4 = gameState.vowelCenter4;
         this.saveMenuConfig();
     };
 
@@ -1571,7 +1617,7 @@ export class LetterFastGame extends preact.Component {
         })));
 
         const trie = await getWordTrie();
-        const result = findAllWordsInGrid(newGrid, trie);
+        const result = findAllWordsInGrid(newGrid, trie, gameState.wordLengthMode);
 
         gameState.gridWidth = width;
         gameState.gridHeight = rows.length;
@@ -1826,7 +1872,7 @@ export class LetterFastGame extends preact.Component {
         // and how they were spelled.
         const trie = await getWordTrie();
         if (grid !== gameState.grid) return this.demoCache;
-        const allResult = findAllWordsInGrid(grid, trie);
+        const allResult = findAllWordsInGrid(grid, trie, gameState.wordLengthMode);
         const foundSet = new Set<string>();
         for (const w of gameState.matchedWords) foundSet.add(w.word.toLowerCase());
         const finishedScored: { path: { row: number; col: number }[]; score: number; word: string }[] = [];
@@ -2126,7 +2172,10 @@ export class LetterFastGame extends preact.Component {
             .join("")
             .toLowerCase();
 
-        if (word.length < 3) return;
+        if (!isWordLengthAllowed(word.length, gameState.wordLengthMode)) {
+            this.showWrongWordFeedback(word);
+            return;
+        }
 
         const wordSet = await getWordSet();
         if (!wordSet.has(word)) {
@@ -3337,6 +3386,83 @@ export class LetterFastGame extends preact.Component {
                                         }}
                                     />
                                     <span>Auto-pick highest-scoring path</span>
+                                </label>
+                            </div>
+                        );
+                    })()}
+
+                    {(() => {
+                        const is4x4 = this.synced.cfgWidth === 4 && this.synced.cfgHeight === 4;
+                        return (
+                            <div className={css.vbox(4)}>
+                                <div className={sectionTitle}>Rules{hostOnlySuffix}</div>
+                                <label
+                                    className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? "" : css.opacity(0.6))}
+                                    title={hostOnlyTitle || "Filter which word lengths count, anywhere in the game"}
+                                >
+                                    <span style={{ minWidth: 90 }}>Word length</span>
+                                    <select
+                                        value={this.synced.cfgWordLengthMode}
+                                        disabled={!isHost}
+                                        onChange={(e) => {
+                                            const v = e.currentTarget.value as "any" | "min4" | "exactly3";
+                                            this.synced.cfgWordLengthMode = v;
+                                            this.saveMenuConfig();
+                                        }}
+                                        className={css.fontSize(13).pad2(4, 6) + ""}
+                                    >
+                                        <option value="any">Any (3+ letters)</option>
+                                        <option value="min4">4+ letters only</option>
+                                        <option value="exactly3">Exactly 3 letters</option>
+                                    </select>
+                                </label>
+                                <div
+                                    className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? "" : css.opacity(0.6))}
+                                    title={hostOnlyTitle || "Regenerate the board (up to 20 times) until the total possible score is in this range. Leave blank for no bound."}
+                                >
+                                    <span style={{ minWidth: 90 }}>Score range</span>
+                                    <input
+                                        type="number"
+                                        placeholder="min"
+                                        min="0"
+                                        value={this.synced.cfgTargetScoreMinStr}
+                                        disabled={!isHost}
+                                        onInput={(e) => { this.synced.cfgTargetScoreMinStr = e.currentTarget.value; }}
+                                        onBlur={(e) => {
+                                            this.synced.cfgTargetScoreMinStr = e.currentTarget.value.trim();
+                                            this.saveMenuConfig();
+                                        }}
+                                        className={css.fontSize(13).pad2(4, 6).width(64) + ""}
+                                    />
+                                    <span className={css.colorhsl(0, 0, 60) + ""}>–</span>
+                                    <input
+                                        type="number"
+                                        placeholder="max"
+                                        min="0"
+                                        value={this.synced.cfgTargetScoreMaxStr}
+                                        disabled={!isHost}
+                                        onInput={(e) => { this.synced.cfgTargetScoreMaxStr = e.currentTarget.value; }}
+                                        onBlur={(e) => {
+                                            this.synced.cfgTargetScoreMaxStr = e.currentTarget.value.trim();
+                                            this.saveMenuConfig();
+                                        }}
+                                        className={css.fontSize(13).pad2(4, 6).width(64) + ""}
+                                    />
+                                </div>
+                                <label
+                                    className={css.hbox(6).alignItems("center").fontSize(12) + ((isHost && is4x4) ? css.cursor("pointer") : css.opacity(0.5))}
+                                    title={!isHost ? hostOnlyTitle! : !is4x4 ? "Only available on a 4x4 grid" : "Force the four center cells to vowels"}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={this.synced.cfgVowelCenter4}
+                                        disabled={!isHost || !is4x4}
+                                        onChange={(e) => {
+                                            this.synced.cfgVowelCenter4 = e.currentTarget.checked;
+                                            this.saveMenuConfig();
+                                        }}
+                                    />
+                                    <span>Center 4 cells must be vowels (4x4 only)</span>
                                 </label>
                             </div>
                         );

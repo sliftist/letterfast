@@ -1,6 +1,16 @@
-import { GridCell, LETTER_POINTS, LETTER_FREQUENCY, MIN_VOWEL_FRACTION, MAX_VOWEL_FRACTION } from "./GameState";
+import { GridCell, LETTER_POINTS, LETTER_FREQUENCY, MIN_VOWEL_FRACTION, MAX_VOWEL_FRACTION, WordLengthMode, isWordLengthAllowed, GRID_RETRY_LIMIT } from "./GameState";
 import { getWords } from "./words";
 import { getSeededRandom } from "sliftutils/misc/random";
+
+export interface GridGenOptions {
+    wordLengthMode?: WordLengthMode;
+    /** When score falls below this, the generator retries with a new seed (up to GRID_RETRY_LIMIT times). */
+    targetScoreMin?: number;
+    /** When score exceeds this, the generator retries. */
+    targetScoreMax?: number;
+    /** 4x4 only: force the four center cells to vowels and lock them from optimizer / vowel-balance swaps. */
+    vowelCenter4?: boolean;
+}
 
 const VOWELS = "AEIOU";
 const CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
@@ -82,9 +92,9 @@ export async function getWordTrie(): Promise<Trie> {
 // "exhausted cell" check. Centralized so every caller (grid generation,
 // board import, challenge mode, multiplayer grid arrival) uses the exact
 // same logic and the index stays in sync with the live grid.
-export function buildCellToWords(grid: GridCell[][], trie: Trie): Map<string, Set<string>> {
+export function buildCellToWords(grid: GridCell[][], trie: Trie, wordLengthMode: WordLengthMode = "any"): Map<string, Set<string>> {
     const cellToWords = new Map<string, Set<string>>();
-    const result = findAllWordsInGrid(grid, trie);
+    const result = findAllWordsInGrid(grid, trie, wordLengthMode);
     for (const [word, cells] of result.wordPaths) {
         const upperWord = word.toUpperCase();
         for (const cellKey of cells) {
@@ -151,7 +161,7 @@ export function findPathsForWord(grid: GridCell[][], target: string): { row: num
     return paths;
 }
 
-export function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
+export function findAllWordsInGrid(grid: GridCell[][], trie: Trie, wordLengthMode: WordLengthMode = "any"): { words: Set<string>; wordPaths: Map<string, Set<string>>; iterations: number; hitLimit: boolean } {
     let foundWords = new Set<string>();
     let wordPaths = new Map<string, Set<string>>();
     let height = grid.length;
@@ -170,7 +180,7 @@ export function findAllWordsInGrid(grid: GridCell[][], trie: Trie): { words: Set
             return;
         }
 
-        if (word.length >= 3 && trie.isWord(word)) {
+        if (isWordLengthAllowed(word.length, wordLengthMode) && trie.isWord(word)) {
             let lowerWord = word.toLowerCase();
             foundWords.add(lowerWord);
             let cellsSet = wordPaths.get(lowerWord);
@@ -319,7 +329,7 @@ function countLetterOccurrences(grid: GridCell[][], letter: string): number {
     return count;
 }
 
-function ensureVowelLimits(grid: GridCell[][], random: () => number, enforceLetterLimit: boolean) {
+function ensureVowelLimits(grid: GridCell[][], random: () => number, enforceLetterLimit: boolean, lockedCells?: Set<string>) {
     let totalCells = grid.length * grid[0].length;
     let minVowels = Math.ceil(totalCells * MIN_VOWEL_FRACTION);
     let maxVowels = Math.floor(totalCells * MAX_VOWEL_FRACTION);
@@ -330,6 +340,7 @@ function ensureVowelLimits(grid: GridCell[][], random: () => number, enforceLett
     while (vowelCount < minVowels) {
         let row = Math.floor(random() * grid.length);
         let col = Math.floor(random() * grid[0].length);
+        if (lockedCells && lockedCells.has(`${row},${col}`)) continue;
         if (!VOWELS.includes(grid[row][col].letter)) {
             let vowel: string | undefined;
             if (enforceLetterLimit) {
@@ -361,6 +372,7 @@ function ensureVowelLimits(grid: GridCell[][], random: () => number, enforceLett
     while (vowelCount > maxVowels) {
         let row = Math.floor(random() * grid.length);
         let col = Math.floor(random() * grid[0].length);
+        if (lockedCells && lockedCells.has(`${row},${col}`)) continue;
         if (VOWELS.includes(grid[row][col].letter)) {
             let consonant: string | undefined;
             if (enforceLetterLimit) {
@@ -465,7 +477,50 @@ export function calculateTotalScoreForWords(grid: GridCell[][], words: Set<strin
     return totalScore;
 }
 
-export async function generateGameGrid(seed: number, width: number, height: number): Promise<GridMetadata> {
+// Generates a grid that respects the supplied options. If targetScoreMin/Max are set, the generator may discard and regenerate up to GRID_RETRY_LIMIT times until the score lands inside the range; failing that, the closest attempt is returned so we always produce a board. seed is the seed for the FIRST attempt — retries derive their seeds from it deterministically (seed * 65537 + attempt) so a given seed still maps to a single deterministic grid for any given set of options.
+export async function generateGameGrid(seed: number, width: number, height: number, options: GridGenOptions = {}): Promise<GridMetadata> {
+    const { targetScoreMin, targetScoreMax } = options;
+    const hasRangeConstraint = (targetScoreMin && targetScoreMin > 0) || (targetScoreMax && targetScoreMax > 0);
+
+    let bestResult: GridMetadata | undefined;
+    let bestDistance = Infinity;
+    const attempts = hasRangeConstraint ? GRID_RETRY_LIMIT : 1;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        const attemptSeed = attempt === 0 ? seed : Math.floor(seed * 65537 + attempt);
+        const result = await generateGameGridOnce(attemptSeed, width, height, options);
+        const score = result.totalPossibleScore;
+
+        let distance = 0;
+        if (targetScoreMin && targetScoreMin > 0 && score < targetScoreMin) distance += targetScoreMin - score;
+        if (targetScoreMax && targetScoreMax > 0 && score > targetScoreMax) distance += score - targetScoreMax;
+
+        if (distance === 0) {
+            if (attempt > 0) console.log(`Score ${score} in range after ${attempt + 1} attempts`);
+            return result;
+        }
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestResult = result;
+        }
+    }
+
+    console.log(`Score range not met after ${attempts} attempts; using closest (off by ${bestDistance}).`);
+    return bestResult!;
+}
+
+async function generateGameGridOnce(seed: number, width: number, height: number, options: GridGenOptions): Promise<GridMetadata> {
+    const wordLengthMode = options.wordLengthMode ?? "any";
+    const vowelCenter4 = !!options.vowelCenter4 && width === 4 && height === 4;
+    // Center 4 cells of a 4x4 grid (rows/cols 1 and 2). When vowelCenter4 is on, these are seeded as vowels and then locked from every later mutation (ensureVowelLimits, optimizer swaps, placeSeedWord).
+    const lockedCells = new Set<string>();
+    if (vowelCenter4) {
+        lockedCells.add("1,1");
+        lockedCells.add("1,2");
+        lockedCells.add("2,1");
+        lockedCells.add("2,2");
+    }
+
     let random = getSeededRandom(seed);
     let grid: GridCell[][] = [];
     let totalCells = width * height;
@@ -475,7 +530,21 @@ export async function generateGameGrid(seed: number, width: number, height: numb
         let rowCells: GridCell[] = [];
         for (let col = 0; col < width; col++) {
             let letter: string;
-            if (enforceLetterLimit) {
+            const forceVowel = lockedCells.has(`${row},${col}`);
+            if (forceVowel) {
+                if (enforceLetterLimit) {
+                    let attempts = 0;
+                    do {
+                        letter = VOWELS[Math.floor(random() * VOWELS.length)];
+                        attempts++;
+                        if (attempts > 1000) {
+                            throw new Error("Failed to seed center vowel with letter limit constraint after 1000 attempts");
+                        }
+                    } while (countLetterOccurrences(grid, letter) + rowCells.filter(c => c.letter === letter).length >= 2);
+                } else {
+                    letter = VOWELS[Math.floor(random() * VOWELS.length)];
+                }
+            } else if (enforceLetterLimit) {
                 let attempts = 0;
                 do {
                     letter = LETTER_FREQUENCY[Math.floor(random() * LETTER_FREQUENCY.length)];
@@ -501,9 +570,9 @@ export async function generateGameGrid(seed: number, width: number, height: numb
         throw new Error("Failed to load word data");
     }
 
-    ensureVowelLimits(grid, random, enforceLetterLimit);
+    ensureVowelLimits(grid, random, enforceLetterLimit, lockedCells);
 
-    let initialResult = findAllWordsInGrid(grid, wordTrie);
+    let initialResult = findAllWordsInGrid(grid, wordTrie, wordLengthMode);
     let totalWords = initialResult.words.size;
 
     if (initialResult.hitLimit) {
@@ -515,6 +584,7 @@ export async function generateGameGrid(seed: number, width: number, height: numb
             for (let row = 0; row < height; row++) {
                 for (let col = 0; col < width; col++) {
                     let cellKey = `${row},${col}`;
+                    if (lockedCells.has(cellKey)) continue;
                     let contribution = 0;
                     for (let [word, cells] of initialResult.wordPaths) {
                         if (cells.has(cellKey)) {
@@ -557,9 +627,9 @@ export async function generateGameGrid(seed: number, width: number, height: numb
             grid[leastUsefulCell.row][leastUsefulCell.col].letter = newLetter;
             grid[leastUsefulCell.row][leastUsefulCell.col].points = LETTER_POINTS[newLetter] || 1;
 
-            ensureVowelLimits(grid, random, enforceLetterLimit);
+            ensureVowelLimits(grid, random, enforceLetterLimit, lockedCells);
 
-            let newResult = findAllWordsInGrid(grid, wordTrie);
+            let newResult = findAllWordsInGrid(grid, wordTrie, wordLengthMode);
 
             if (newResult.hitLimit) {
                 grid[leastUsefulCell.row][leastUsefulCell.col].letter = oldLetter;
@@ -579,9 +649,12 @@ export async function generateGameGrid(seed: number, width: number, height: numb
         }
     }
 
-    placeSeedWord(grid, wordSet, random);
+    // placeSeedWord forces a 7-8 letter rare-letter word along a random path. With vowel-center locking that path can't include the center 4 cells, which is too restrictive on a 4x4 — so skip it when any cell is locked. The seed word is a "nice to have"; correctness doesn't depend on it.
+    if (lockedCells.size === 0) {
+        placeSeedWord(grid, wordSet, random);
+    }
 
-    let finalResult = findAllWordsInGrid(grid, wordTrie);
+    let finalResult = findAllWordsInGrid(grid, wordTrie, wordLengthMode);
     let cellToWords = new Map<string, Set<string>>();
 
     for (let [word, cells] of finalResult.wordPaths) {
