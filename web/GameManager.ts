@@ -31,8 +31,7 @@ interface Game {
     gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     wordLengthMode: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    targetScore?: number;
     vowelCenter4: boolean;
     timerSeqNum: number;
     // clientId of the designated host (sticky). The host stays designated
@@ -67,8 +66,7 @@ export interface GameSnapshot {
     showRemainingWordsPerCell: boolean;
     showTotalPossibleScore: boolean;
     wordLengthMode: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    targetScore?: number;
     vowelCenter4: boolean;
     totalPossibleWords: number;
     totalPossibleScore: number;
@@ -105,8 +103,7 @@ interface SerializedGame {
     gameMode: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction: number;
     wordLengthMode?: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    targetScore?: number;
     vowelCenter4?: boolean;
     timerSeqNum: number;
     hostClientId: string;
@@ -143,8 +140,7 @@ export function serializeAllGames(): { id: string; data: string }[] {
             gameMode: game.gameMode,
             coopGoalFraction: game.coopGoalFraction,
             wordLengthMode: game.wordLengthMode,
-            targetScoreMin: game.targetScoreMin,
-            targetScoreMax: game.targetScoreMax,
+            targetScore: game.targetScore,
             vowelCenter4: game.vowelCenter4,
             timerSeqNum: game.timerSeqNum,
             hostClientId: game.hostClientId,
@@ -191,8 +187,7 @@ export function restoreSerializedGames(rows: { id: string; data: string }[]): { 
             gameMode: s.gameMode,
             coopGoalFraction: s.coopGoalFraction,
             wordLengthMode: s.wordLengthMode ?? DEFAULT_WORD_LENGTH_MODE,
-            targetScoreMin: s.targetScoreMin,
-            targetScoreMax: s.targetScoreMax,
+            targetScore: s.targetScore,
             vowelCenter4: !!s.vowelCenter4,
             timerSeqNum: s.timerSeqNum,
             hostClientId: s.hostClientId ?? (s.clientIds[0] ?? ""),
@@ -253,8 +248,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier, 
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         wordLengthMode: DEFAULT_WORD_LENGTH_MODE,
-        targetScoreMin: undefined,
-        targetScoreMax: undefined,
+        targetScore: undefined,
         vowelCenter4: false,
         timerSeqNum: 0,
         hostClientId: clientId,
@@ -293,8 +287,7 @@ export async function createGameWithId(gameId: string, playerCount: number, play
         gameMode: DEFAULT_GAME_MODE,
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         wordLengthMode: DEFAULT_WORD_LENGTH_MODE,
-        targetScoreMin: undefined,
-        targetScoreMax: undefined,
+        targetScore: undefined,
         vowelCenter4: false,
         timerSeqNum: 0,
         hostClientId: clientId,
@@ -449,8 +442,7 @@ export async function startGamePlaying(gameId: string): Promise<number> {
     const now = Date.now();
     const gridMetadata = await generateGameGrid(now, game.gridWidth, game.gridHeight, {
         wordLengthMode: game.wordLengthMode,
-        targetScoreMin: game.targetScoreMin,
-        targetScoreMax: game.targetScoreMax,
+        targetScore: game.targetScore,
         vowelCenter4: game.vowelCenter4,
     });
     game.grid = gridMetadata.grid;
@@ -515,8 +507,7 @@ export function getSnapshot(gameId: string, player: PlayerIdentifier): GameSnaps
         showRemainingWordsPerCell: game.showRemainingWordsPerCell,
         showTotalPossibleScore: game.showTotalPossibleScore,
         wordLengthMode: game.wordLengthMode,
-        targetScoreMin: game.targetScoreMin,
-        targetScoreMax: game.targetScoreMax,
+        targetScore: game.targetScore,
         vowelCenter4: game.vowelCenter4,
         totalPossibleWords: game.totalPossibleWords,
         totalPossibleScore: game.totalPossibleScore,
@@ -735,8 +726,7 @@ export function updateGameSettings(config: {
     gameMode?: "competitive" | "cooperative" | "competitive-shared";
     coopGoalFraction?: number;
     wordLengthMode?: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    targetScore?: number;
     vowelCenter4?: boolean;
 }): void {
     const game = games.get(config.gameId);
@@ -793,11 +783,8 @@ export function updateGameSettings(config: {
             game.wordLengthMode = "any";
         }
     }
-    if (config.targetScoreMin !== undefined) {
-        game.targetScoreMin = config.targetScoreMin > 0 ? config.targetScoreMin : undefined;
-    }
-    if (config.targetScoreMax !== undefined) {
-        game.targetScoreMax = config.targetScoreMax > 0 ? config.targetScoreMax : undefined;
+    if (config.targetScore !== undefined) {
+        game.targetScore = config.targetScore > 0 ? config.targetScore : undefined;
     }
     if (config.vowelCenter4 !== undefined) {
         game.vowelCenter4 = !!config.vowelCenter4;
@@ -806,7 +793,7 @@ export function updateGameSettings(config: {
     game.timerSeqNum++;
 }
 
-export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number; wordLengthMode: WordLengthMode; targetScoreMin: number | undefined; targetScoreMax: number | undefined; vowelCenter4: boolean } {
+export function getGameSettings(gameId: string): { gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number; wordLengthMode: WordLengthMode; targetScore: number | undefined; vowelCenter4: boolean } {
     const game = games.get(gameId);
     if (!game) {
         throw new Error(`Game ${gameId} not found`);
@@ -820,8 +807,7 @@ export function getGameSettings(gameId: string): { gridWidth: number; gridHeight
         gameMode: game.gameMode,
         coopGoalFraction: game.coopGoalFraction,
         wordLengthMode: game.wordLengthMode,
-        targetScoreMin: game.targetScoreMin,
-        targetScoreMax: game.targetScoreMax,
+        targetScore: game.targetScore,
         vowelCenter4: game.vowelCenter4,
     };
 }

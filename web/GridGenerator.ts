@@ -4,10 +4,8 @@ import { getSeededRandom } from "sliftutils/misc/random";
 
 export interface GridGenOptions {
     wordLengthMode?: WordLengthMode;
-    /** When score falls below this, the generator retries with a new seed (up to GRID_RETRY_LIMIT times). */
-    targetScoreMin?: number;
-    /** When score exceeds this, the generator retries. */
-    targetScoreMax?: number;
+    /** When set, the generator runs GRID_RETRY_LIMIT attempts and returns the grid whose totalPossibleScore is closest to this value. */
+    targetScore?: number;
     /** 4x4 only: force the four center cells to vowels and lock them from optimizer / vowel-balance swaps. */
     vowelCenter4?: boolean;
 }
@@ -477,35 +475,29 @@ export function calculateTotalScoreForWords(grid: GridCell[][], words: Set<strin
     return totalScore;
 }
 
-// Generates a grid that respects the supplied options. If targetScoreMin/Max are set, the generator may discard and regenerate up to GRID_RETRY_LIMIT times until the score lands inside the range; failing that, the closest attempt is returned so we always produce a board. seed is the seed for the FIRST attempt — retries derive their seeds from it deterministically (seed * 65537 + attempt) so a given seed still maps to a single deterministic grid for any given set of options.
+// Generates a grid that respects the supplied options. When targetScore is set we run exactly GRID_RETRY_LIMIT attempts (no early exit — an "exact" hit is statistically unreachable when the generator can only produce discrete word sets) and return whichever attempt has the smallest |score - targetScore|. seed seeds the FIRST attempt; retries derive their seeds from it deterministically so a given (seed, options) tuple always picks the same winner.
 export async function generateGameGrid(seed: number, width: number, height: number, options: GridGenOptions = {}): Promise<GridMetadata> {
-    const { targetScoreMin, targetScoreMax } = options;
-    const hasRangeConstraint = (targetScoreMin && targetScoreMin > 0) || (targetScoreMax && targetScoreMax > 0);
+    const target = options.targetScore && options.targetScore > 0 ? options.targetScore : undefined;
+    const attempts = target !== undefined ? GRID_RETRY_LIMIT : 1;
 
     let bestResult: GridMetadata | undefined;
     let bestDistance = Infinity;
-    const attempts = hasRangeConstraint ? GRID_RETRY_LIMIT : 1;
+    let bestAttempt = 0;
 
     for (let attempt = 0; attempt < attempts; attempt++) {
         const attemptSeed = attempt === 0 ? seed : Math.floor(seed * 65537 + attempt);
         const result = await generateGameGridOnce(attemptSeed, width, height, options);
-        const score = result.totalPossibleScore;
+        if (target === undefined) return result;
 
-        let distance = 0;
-        if (targetScoreMin && targetScoreMin > 0 && score < targetScoreMin) distance += targetScoreMin - score;
-        if (targetScoreMax && targetScoreMax > 0 && score > targetScoreMax) distance += score - targetScoreMax;
-
-        if (distance === 0) {
-            if (attempt > 0) console.log(`Score ${score} in range after ${attempt + 1} attempts`);
-            return result;
-        }
+        const distance = Math.abs(result.totalPossibleScore - target);
         if (distance < bestDistance) {
             bestDistance = distance;
             bestResult = result;
+            bestAttempt = attempt;
         }
     }
 
-    console.log(`Score range not met after ${attempts} attempts; using closest (off by ${bestDistance}).`);
+    console.log(`Target ${target}: kept attempt #${bestAttempt + 1}/${attempts} (score ${bestResult!.totalPossibleScore}, off by ${bestDistance}).`);
     return bestResult!;
 }
 

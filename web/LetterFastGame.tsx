@@ -29,6 +29,7 @@ import {
     DEFAULT_COOP_GOAL_FRACTION,
     LETTER_POINTS,
     isWordLengthAllowed,
+    TARGET_SCORE_PRESETS,
 } from "./GameState";
 import { findPathsForWord, findAllWordsInGrid, getWordTrie } from "./GridGenerator";
 import { getClientId } from "./ClientId";
@@ -340,8 +341,7 @@ export class LetterFastGame extends preact.Component {
         cfgCoopGoalPct: Math.round(DEFAULT_COOP_GOAL_FRACTION * 100),
         cfgCoopGoalPctStr: String(Math.round(DEFAULT_COOP_GOAL_FRACTION * 100)),
         cfgWordLengthMode: "any" as "any" | "min4" | "exactly3",
-        cfgTargetScoreMinStr: "",
-        cfgTargetScoreMaxStr: "",
+        cfgTargetScore: 0,
         cfgVowelCenter4: false,
         joinGameId: randomGameCode(),
         joining: false,
@@ -490,8 +490,6 @@ export class LetterFastGame extends preact.Component {
         if (options?.autoStart && gameState.status !== "waiting") return;
         try {
             const rpc = getRPCClient();
-            const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
-            const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
             await (rpc as any).updateGameSettings(
                 gameState.gameId,
                 this.synced.cfgWidth,
@@ -502,8 +500,7 @@ export class LetterFastGame extends preact.Component {
                 this.synced.cfgGameMode,
                 this.synced.cfgCoopGoalPct / 100,
                 this.synced.cfgWordLengthMode,
-                Number.isFinite(targetMin) && targetMin > 0 ? targetMin : 0,
-                Number.isFinite(targetMax) && targetMax > 0 ? targetMax : 0,
+                this.synced.cfgTargetScore > 0 ? this.synced.cfgTargetScore : 0,
                 this.synced.cfgVowelCenter4,
             );
             await rpc.startGame(gameState.gameId);
@@ -1355,10 +1352,7 @@ export class LetterFastGame extends preact.Component {
     };
 
     saveMenuConfig = () => {
-        const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
-        const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
-        const targetScoreMin = Number.isFinite(targetMin) && targetMin > 0 ? targetMin : undefined;
-        const targetScoreMax = Number.isFinite(targetMax) && targetMax > 0 ? targetMax : undefined;
+        const targetScore = this.synced.cfgTargetScore > 0 ? this.synced.cfgTargetScore : undefined;
         saveConfig({
             gridWidth: this.synced.cfgWidth,
             gridHeight: this.synced.cfgHeight,
@@ -1369,8 +1363,7 @@ export class LetterFastGame extends preact.Component {
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
             autoBestPath: this.synced.cfgAutoBestPath,
             wordLengthMode: this.synced.cfgWordLengthMode,
-            targetScoreMin,
-            targetScoreMax,
+            targetScore,
             vowelCenter4: this.synced.cfgVowelCenter4,
         });
         applySettings({
@@ -1380,8 +1373,7 @@ export class LetterFastGame extends preact.Component {
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
             wordLengthMode: this.synced.cfgWordLengthMode,
             // Pass 0 for "unset" so applySettings clears any prior value (rather than ignoring undefined).
-            targetScoreMin: targetScoreMin ?? 0,
-            targetScoreMax: targetScoreMax ?? 0,
+            targetScore: targetScore ?? 0,
             vowelCenter4: this.synced.cfgVowelCenter4,
         });
         if (gameState.isMultiplayer && gameState.gameId && gameState.myPlayerIndex === gameState.hostPlayerIndex) {
@@ -1398,8 +1390,7 @@ export class LetterFastGame extends preact.Component {
                         this.synced.cfgGameMode,
                         this.synced.cfgCoopGoalPct / 100,
                         this.synced.cfgWordLengthMode,
-                        targetScoreMin ?? 0,
-                        targetScoreMax ?? 0,
+                        targetScore ?? 0,
                         this.synced.cfgVowelCenter4,
                     );
                 } catch (error) {
@@ -1418,16 +1409,13 @@ export class LetterFastGame extends preact.Component {
         gameState.gridWidth = w;
         gameState.gridHeight = h;
         gameState.gameDuration = this.synced.cfgDuration;
-        const targetMin = parseInt(this.synced.cfgTargetScoreMinStr, 10);
-        const targetMax = parseInt(this.synced.cfgTargetScoreMaxStr, 10);
         applySettings({
             showRemainingWordsPerCell: this.synced.cfgShowRemaining,
             showTotalPossibleScore: this.synced.cfgShowTotal,
             gameMode: this.synced.cfgGameMode,
             coopGoalFraction: this.synced.cfgCoopGoalPct / 100,
             wordLengthMode: this.synced.cfgWordLengthMode,
-            targetScoreMin: Number.isFinite(targetMin) && targetMin > 0 ? targetMin : 0,
-            targetScoreMax: Number.isFinite(targetMax) && targetMax > 0 ? targetMax : 0,
+            targetScore: this.synced.cfgTargetScore > 0 ? this.synced.cfgTargetScore : 0,
             vowelCenter4: this.synced.cfgVowelCenter4,
         });
         await startGame();
@@ -1449,8 +1437,7 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgGameMode = gameState.gameMode;
             this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
             this.synced.cfgWordLengthMode = gameState.wordLengthMode;
-            this.synced.cfgTargetScoreMinStr = gameState.targetScoreMin ? String(gameState.targetScoreMin) : "";
-            this.synced.cfgTargetScoreMaxStr = gameState.targetScoreMax ? String(gameState.targetScoreMax) : "";
+            this.synced.cfgTargetScore = gameState.targetScore ?? 0;
             this.synced.cfgVowelCenter4 = gameState.vowelCenter4;
         } else if (saved) {
             this.synced.cfgWidth = saved.gridWidth;
@@ -1461,8 +1448,7 @@ export class LetterFastGame extends preact.Component {
             this.synced.cfgGameMode = saved.gameMode ?? DEFAULT_GAME_MODE;
             this.synced.cfgCoopGoalPct = Math.round((saved.coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION) * 100);
             this.synced.cfgWordLengthMode = saved.wordLengthMode ?? "any";
-            this.synced.cfgTargetScoreMinStr = saved.targetScoreMin ? String(saved.targetScoreMin) : "";
-            this.synced.cfgTargetScoreMaxStr = saved.targetScoreMax ? String(saved.targetScoreMax) : "";
+            this.synced.cfgTargetScore = saved.targetScore ?? 0;
             this.synced.cfgVowelCenter4 = !!saved.vowelCenter4;
         }
         // autoBestPath is a client-side preference, never part of a game's shared state — always from saved prefs.
@@ -1485,8 +1471,7 @@ export class LetterFastGame extends preact.Component {
         this.synced.cfgCoopGoalPct = Math.round(gameState.coopGoalFraction * 100);
         this.synced.cfgCoopGoalPctStr = String(Math.round(gameState.coopGoalFraction * 100));
         this.synced.cfgWordLengthMode = gameState.wordLengthMode;
-        this.synced.cfgTargetScoreMinStr = gameState.targetScoreMin ? String(gameState.targetScoreMin) : "";
-        this.synced.cfgTargetScoreMaxStr = gameState.targetScoreMax ? String(gameState.targetScoreMax) : "";
+        this.synced.cfgTargetScore = gameState.targetScore ?? 0;
         this.synced.cfgVowelCenter4 = gameState.vowelCenter4;
         this.saveMenuConfig();
     };
@@ -3416,39 +3401,27 @@ export class LetterFastGame extends preact.Component {
                                         <option value="exactly3">Exactly 3 letters</option>
                                     </select>
                                 </label>
-                                <div
+                                <label
                                     className={css.hbox(6).alignItems("center").fontSize(12) + (isHost ? "" : css.opacity(0.6))}
-                                    title={hostOnlyTitle || "Regenerate the board (up to 20 times) until the total possible score is in this range. Leave blank for no bound."}
+                                    title={hostOnlyTitle || "Generates 30 boards and keeps the one whose total score lands closest to the target. None = single generation, no targeting."}
                                 >
-                                    <span style={{ minWidth: 90 }}>Score range</span>
-                                    <input
-                                        type="number"
-                                        placeholder="min"
-                                        min="0"
-                                        value={this.synced.cfgTargetScoreMinStr}
+                                    <span style={{ minWidth: 90 }}>Target score</span>
+                                    <select
+                                        value={String(this.synced.cfgTargetScore)}
                                         disabled={!isHost}
-                                        onInput={(e) => { this.synced.cfgTargetScoreMinStr = e.currentTarget.value; }}
-                                        onBlur={(e) => {
-                                            this.synced.cfgTargetScoreMinStr = e.currentTarget.value.trim();
+                                        onChange={(e) => {
+                                            const v = parseInt(e.currentTarget.value, 10);
+                                            this.synced.cfgTargetScore = Number.isFinite(v) && v > 0 ? v : 0;
                                             this.saveMenuConfig();
                                         }}
-                                        className={css.fontSize(13).pad2(4, 6).width(64) + ""}
-                                    />
-                                    <span className={css.colorhsl(0, 0, 60) + ""}>–</span>
-                                    <input
-                                        type="number"
-                                        placeholder="max"
-                                        min="0"
-                                        value={this.synced.cfgTargetScoreMaxStr}
-                                        disabled={!isHost}
-                                        onInput={(e) => { this.synced.cfgTargetScoreMaxStr = e.currentTarget.value; }}
-                                        onBlur={(e) => {
-                                            this.synced.cfgTargetScoreMaxStr = e.currentTarget.value.trim();
-                                            this.saveMenuConfig();
-                                        }}
-                                        className={css.fontSize(13).pad2(4, 6).width(64) + ""}
-                                    />
-                                </div>
+                                        className={css.fontSize(13).pad2(4, 6) + ""}
+                                    >
+                                        <option value="0">None</option>
+                                        {TARGET_SCORE_PRESETS.map(n => (
+                                            <option key={n} value={String(n)}>~{n}</option>
+                                        ))}
+                                    </select>
+                                </label>
                                 <label
                                     className={css.hbox(6).alignItems("center").fontSize(12) + ((isHost && is4x4) ? css.cursor("pointer") : css.opacity(0.5))}
                                     title={!isHost ? hostOnlyTitle! : !is4x4 ? "Only available on a 4x4 grid" : "Force the four center cells to vowels"}

@@ -31,8 +31,11 @@ export function isWordLengthAllowed(wordLen: number, mode: WordLengthMode | unde
     return true;
 }
 
-// Max grid-generation retries when targetScoreMin/Max is set. Caps the work the optimizer does so a configuration that can't be satisfied (e.g. min > max) still terminates promptly.
-export const GRID_RETRY_LIMIT = 20;
+// When a targetScore is set, the generator runs exactly this many attempts and returns the one whose totalPossibleScore is closest to the target. Higher = better matches but slower new-game startup.
+export const GRID_RETRY_LIMIT = 30;
+
+// Preset score targets surfaced in the menu. Picked by hand to cover the useful range from tiny boards up to dense ones. Editing this list updates the dropdown.
+export const TARGET_SCORE_PRESETS: number[] = [300, 500, 750, 1200, 1800, 2500];
 
 export interface GridCell {
     letter: string;
@@ -103,8 +106,8 @@ export interface GameState {
      *  milestone). Cleared at the start of any new game. */
     coopInfinite: boolean;
     wordLengthMode: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    /** When set, the generator runs GRID_RETRY_LIMIT attempts and keeps the grid whose totalPossibleScore lands closest to this. Undefined disables target-matching. */
+    targetScore?: number;
     /** When true, the four center cells of a 4x4 grid are forced to vowels and locked from the optimizer's swap loop. No effect on other grid sizes. */
     vowelCenter4: boolean;
     peerFlashRequest?: { id: number; cells: { row: number; col: number }[]; playerIndex: number };
@@ -187,8 +190,7 @@ async function generateGrid(): Promise<GridCell[][]> {
     let seed = Date.now();
     let result = await generateGameGrid(seed, gameState.gridWidth, gameState.gridHeight, {
         wordLengthMode: gameState.wordLengthMode,
-        targetScoreMin: gameState.targetScoreMin,
-        targetScoreMax: gameState.targetScoreMax,
+        targetScore: gameState.targetScore,
         vowelCenter4: gameState.vowelCenter4,
     });
     gameState.totalPossibleWords = result.totalPossibleWords;
@@ -236,8 +238,7 @@ export const gameState = observable<GameState>({
     coopGoalFraction: (initialConfig as any).coopGoalFraction ?? DEFAULT_COOP_GOAL_FRACTION,
     coopInfinite: false,
     wordLengthMode: (initialConfig as any).wordLengthMode || DEFAULT_WORD_LENGTH_MODE,
-    targetScoreMin: (initialConfig as any).targetScoreMin,
-    targetScoreMax: (initialConfig as any).targetScoreMax,
+    targetScore: (initialConfig as any).targetScore,
     vowelCenter4: !!(initialConfig as any).vowelCenter4,
     peerFlashRequest: undefined,
     lastGameOverState: undefined,
@@ -250,8 +251,7 @@ export function applySettings(settings: {
     gameMode?: GameMode;
     coopGoalFraction?: number;
     wordLengthMode?: WordLengthMode;
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    targetScore?: number;
     vowelCenter4?: boolean;
 }) {
     if (settings.showRemainingWordsPerCell !== undefined) {
@@ -269,11 +269,8 @@ export function applySettings(settings: {
     if (settings.wordLengthMode !== undefined) {
         gameState.wordLengthMode = settings.wordLengthMode;
     }
-    if (settings.targetScoreMin !== undefined) {
-        gameState.targetScoreMin = settings.targetScoreMin > 0 ? settings.targetScoreMin : undefined;
-    }
-    if (settings.targetScoreMax !== undefined) {
-        gameState.targetScoreMax = settings.targetScoreMax > 0 ? settings.targetScoreMax : undefined;
+    if (settings.targetScore !== undefined) {
+        gameState.targetScore = settings.targetScore > 0 ? settings.targetScore : undefined;
     }
     if (settings.vowelCenter4 !== undefined) {
         gameState.vowelCenter4 = settings.vowelCenter4;

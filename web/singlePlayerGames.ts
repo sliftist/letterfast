@@ -14,8 +14,7 @@ import { findAllWordsInGrid, getWordTrie, calculateTotalScoreForWords } from "./
 //   .g<c>   MODE           "r"=competitive, "s"=competitive-shared; cooperative (default) omitted
 //   .p<n>   COOP GOAL      percent; omitted when default (only meaningful for cooperative)
 //   .w<c>   WORD LENGTH    "f"=min4, "t"=exactly3; "any" (default) omitted
-//   .l<n>   SCORE MIN      regen-floor used during generation; omitted when unset
-//   .h<n>   SCORE MAX      regen-ceiling used during generation; omitted when unset
+//   .t<n>   TARGET SCORE   the score the generator aimed for (30 attempts, closest wins); omitted when unset
 //   .c1     VOWEL CENTER 4 only in 4x4 grids; omitted when off
 // The leading char is always a letter so sliftutils' niceStringify stores it
 // verbatim (a leading digit would get JSON-quoted).
@@ -36,8 +35,7 @@ export interface SingleGameConfig {
     gameMode: GameMode;
     coopGoalFraction: number;
     wordLengthMode: WordLengthMode;
-    targetScoreMin: number | undefined;
-    targetScoreMax: number | undefined;
+    targetScore: number | undefined;
     vowelCenter4: boolean;
 }
 
@@ -77,8 +75,7 @@ export function encodeSingleGameId(config: SingleGameConfig): string {
     if (config.wordLengthMode === "min4") out += ".wf";
     else if (config.wordLengthMode === "exactly3") out += ".wt";
 
-    if (config.targetScoreMin && config.targetScoreMin > 0) out += ".l" + Math.floor(config.targetScoreMin);
-    if (config.targetScoreMax && config.targetScoreMax > 0) out += ".h" + Math.floor(config.targetScoreMax);
+    if (config.targetScore && config.targetScore > 0) out += ".t" + Math.floor(config.targetScore);
     if (config.vowelCenter4) out += ".c1";
 
     return out;
@@ -99,8 +96,7 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
     let gameMode: GameMode = DEFAULT_GAME_MODE;
     let coopGoalFraction = DEFAULT_COOP_GOAL_FRACTION;
     let wordLengthMode: WordLengthMode = DEFAULT_WORD_LENGTH_MODE;
-    let targetScoreMin: number | undefined;
-    let targetScoreMax: number | undefined;
+    let targetScore: number | undefined;
     let vowelCenter4 = false;
     const multipliers = new Map<number, 2 | 3>();
 
@@ -129,12 +125,9 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
         } else if (key === "w") {
             if (data === "f") wordLengthMode = "min4";
             else if (data === "t") wordLengthMode = "exactly3";
-        } else if (key === "l") {
+        } else if (key === "t") {
             const n = parseInt(data, 10);
-            if (Number.isInteger(n) && n > 0) targetScoreMin = n;
-        } else if (key === "h") {
-            const n = parseInt(data, 10);
-            if (Number.isInteger(n) && n > 0) targetScoreMax = n;
+            if (Number.isInteger(n) && n > 0) targetScore = n;
         } else if (key === "c") {
             vowelCenter4 = data === "1";
         }
@@ -154,7 +147,7 @@ export function decodeSingleGameId(id: string): SingleGameConfig | undefined {
         }
         grid.push(row);
     }
-    return { grid, gameDuration, gameMode, coopGoalFraction, wordLengthMode, targetScoreMin, targetScoreMax, vowelCenter4 };
+    return { grid, gameDuration, gameMode, coopGoalFraction, wordLengthMode, targetScore, vowelCenter4 };
 }
 
 // Recomputes the id from the live game and puts it in the URL. Called whenever a new single-player board comes into existence (new game, grid resize, board import).
@@ -168,8 +161,7 @@ export function updateSingleGameURL(): void {
         gameMode: gameState.gameMode,
         coopGoalFraction: gameState.coopGoalFraction,
         wordLengthMode: gameState.wordLengthMode,
-        targetScoreMin: gameState.targetScoreMin,
-        targetScoreMax: gameState.targetScoreMax,
+        targetScore: gameState.targetScore,
         vowelCenter4: gameState.vowelCenter4,
     });
 }
@@ -194,8 +186,7 @@ export async function applySingleGameFromURL(): Promise<boolean> {
     gameState.coopGoalFraction = config.coopGoalFraction;
     // Direct assignment (not applySettings) — undefined values from the URL must override any stale state from a prior game.
     gameState.wordLengthMode = config.wordLengthMode;
-    gameState.targetScoreMin = config.targetScoreMin;
-    gameState.targetScoreMax = config.targetScoreMax;
+    gameState.targetScore = config.targetScore;
     gameState.vowelCenter4 = config.vowelCenter4;
     gameState.totalPossibleWords = result.words.size;
     gameState.totalPossibleScore = calculateTotalScoreForWords(config.grid, result.words, trie);

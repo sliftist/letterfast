@@ -20,10 +20,9 @@ export interface SavedConfig {
      *  word automatically, ignoring which exact cells the user traced. */
     autoBestPath?: boolean;
     wordLengthMode?: WordLengthMode;
-    /** When set, the grid generator retries up to 20 times to keep the total
-     *  possible score within these bounds. Undefined / 0 disables that bound. */
-    targetScoreMin?: number;
-    targetScoreMax?: number;
+    /** When set, the generator runs 30 attempts and keeps the grid whose
+     *  totalPossibleScore is closest to this. Undefined / 0 disables matching. */
+    targetScore?: number;
     /** 4x4 only: force the four center cells to vowels. */
     vowelCenter4?: boolean;
 }
@@ -52,10 +51,8 @@ export function loadSavedConfig(): SavedConfig | undefined {
                 autoBestPath: config.autoBestPath !== false,
                 wordLengthMode: config.wordLengthMode === "min4" || config.wordLengthMode === "exactly3"
                     ? config.wordLengthMode : DEFAULT_WORD_LENGTH_MODE,
-                targetScoreMin: typeof config.targetScoreMin === "number" && config.targetScoreMin > 0
-                    ? Math.floor(config.targetScoreMin) : undefined,
-                targetScoreMax: typeof config.targetScoreMax === "number" && config.targetScoreMax > 0
-                    ? Math.floor(config.targetScoreMax) : undefined,
+                targetScore: typeof config.targetScore === "number" && config.targetScore > 0
+                    ? Math.floor(config.targetScore) : undefined,
                 vowelCenter4: !!config.vowelCenter4,
             };
         }
@@ -86,8 +83,7 @@ export function getSavedConfigOrDefaults(): SavedConfig {
         coopGoalFraction: DEFAULT_COOP_GOAL_FRACTION,
         autoBestPath: true,
         wordLengthMode: DEFAULT_WORD_LENGTH_MODE,
-        targetScoreMin: undefined,
-        targetScoreMax: undefined,
+        targetScore: undefined,
         vowelCenter4: false,
     };
 }

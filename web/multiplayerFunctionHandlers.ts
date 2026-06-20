@@ -393,21 +393,21 @@ const serverHandlers = {
         scheduleRestart(gameId);
     },
 
-    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
+    async updateGameSettings(gameId: string, gridWidth?: number, gridHeight?: number, gameDuration?: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScore?: number, vowelCenter4?: boolean): Promise<void> {
         const player = getServerSideClient();
         if (!player) {
             throw new Error(`No active caller`);
         }
 
-        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore, gameMode, coopGoalFraction, wordLengthMode, targetScoreMin, targetScoreMax, vowelCenter4 });
+        GameManager.updateGameSettings({ gameId, player, gridWidth, gridHeight, gameDuration, showRemainingWordsPerCell, showTotalPossibleScore, gameMode, coopGoalFraction, wordLengthMode, targetScore, vowelCenter4 });
         const settings = GameManager.getGameSettings(gameId);
         void GameManager.broadcastToGame(gameId, async (client) => {
-            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore, settings.gameMode, settings.coopGoalFraction, settings.wordLengthMode, settings.targetScoreMin, settings.targetScoreMax, settings.vowelCenter4);
+            await client.onSettingsUpdate(gameId, settings.gridWidth, settings.gridHeight, settings.gameDuration, settings.showRemainingWordsPerCell, settings.showTotalPossibleScore, settings.gameMode, settings.coopGoalFraction, settings.wordLengthMode, settings.targetScore, settings.vowelCenter4);
         });
         void broadcastSnapshot(gameId);
     },
 
-    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number; wordLengthMode: WordLengthMode; targetScoreMin: number | undefined; targetScoreMax: number | undefined; vowelCenter4: boolean }> {
+    async getGameSettings(gameId: string): Promise<{ gridWidth: number; gridHeight: number; gameDuration: number; showRemainingWordsPerCell: boolean; showTotalPossibleScore: boolean; gameMode: "competitive" | "cooperative" | "competitive-shared"; coopGoalFraction: number; wordLengthMode: WordLengthMode; targetScore: number | undefined; vowelCenter4: boolean }> {
         return GameManager.getGameSettings(gameId);
     },
 
@@ -499,8 +499,7 @@ export const clientHandlers = {
         gameState.showRemainingWordsPerCell = snapshot.showRemainingWordsPerCell;
         gameState.showTotalPossibleScore = snapshot.showTotalPossibleScore;
         gameState.wordLengthMode = snapshot.wordLengthMode;
-        gameState.targetScoreMin = snapshot.targetScoreMin;
-        gameState.targetScoreMax = snapshot.targetScoreMax;
+        gameState.targetScore = snapshot.targetScore;
         gameState.vowelCenter4 = snapshot.vowelCenter4;
         gameState.totalPossibleWords = snapshot.totalPossibleWords;
         gameState.totalPossibleScore = snapshot.totalPossibleScore;
@@ -622,15 +621,14 @@ export const clientHandlers = {
         gameState.restartCountdownEnd = endTime;
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScore?: number, vowelCenter4?: boolean): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
         const generationParamsChanged =
             gameState.gridWidth !== gridWidth
             || gameState.gridHeight !== gridHeight
             || (wordLengthMode !== undefined && gameState.wordLengthMode !== wordLengthMode)
-            || (targetScoreMin !== undefined && gameState.targetScoreMin !== (targetScoreMin > 0 ? targetScoreMin : undefined))
-            || (targetScoreMax !== undefined && gameState.targetScoreMax !== (targetScoreMax > 0 ? targetScoreMax : undefined))
+            || (targetScore !== undefined && gameState.targetScore !== (targetScore > 0 ? targetScore : undefined))
             || (vowelCenter4 !== undefined && gameState.vowelCenter4 !== !!vowelCenter4);
         gameState.gridWidth = gridWidth;
         gameState.gridHeight = gridHeight;
@@ -641,8 +639,7 @@ export const clientHandlers = {
             gameMode,
             coopGoalFraction,
             wordLengthMode,
-            targetScoreMin,
-            targetScoreMax,
+            targetScore,
             vowelCenter4,
         });
         if (gameState.status !== "playing") {
@@ -699,7 +696,7 @@ const clientHandlersNoOp: ClientHandlers = {
     async onGameEnd(gameId: string, players: { id: string; score: number }[], allWords: Record<string, { word: string; points: number }[]>, coopWinningWord?: { word: string; points: number; playerIndex: number }): Promise<void> {
     },
 
-    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScoreMin?: number, targetScoreMax?: number, vowelCenter4?: boolean): Promise<void> {
+    async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScore?: number, vowelCenter4?: boolean): Promise<void> {
     },
 
     async onCoopWord(gameId: string, word: string, points: number, playerIndex: number, cells?: { row: number; col: number }[]): Promise<void> {
