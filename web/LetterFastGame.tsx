@@ -2492,6 +2492,31 @@ export class LetterFastGame extends preact.Component {
                         ▶ Play Again
                     </button>
                 )}
+                {gameState.isMultiplayer && gameState.status === "waiting" && (() => {
+                    // Always show the Start affordance in MP waiting (don't hide it behind the hamburger menu). Coop normally auto-starts on join so this is rare for coop — it's the competitive flow that lingers in "waiting" until the host clicks Start. Non-hosts see the same button shape but disabled with "Waiting for host" so they understand the state.
+                    const isMpHost = gameState.myPlayerIndex === gameState.hostPlayerIndex;
+                    return (
+                        <button
+                            onClick={isMpHost ? () => { void this.tryStartGameAsHost(); } : undefined}
+                            disabled={!isMpHost}
+                            title={isMpHost ? "Start the game" : "Waiting for the host to start the game"}
+                            className={css.hbox(6).alignItems("center")
+                                .pad2(8, 14).borderRadius(8)
+                                .fontSize(16).fontWeight("bold")
+                                .colorhsl(0, 0, 100)
+                                .border(isMpHost ? "2px solid rgba(120, 255, 160, 0.85)" : "2px solid rgba(255,255,255,0.25)")
+                                + (isMpHost ? css.cursor("pointer") : css.cursor("not-allowed").opacity(0.6))}
+                            style={{
+                                background: isMpHost
+                                    ? "linear-gradient(135deg, rgba(0,200,120,0.4), rgba(0,140,90,0.4))"
+                                    : "rgba(255,255,255,0.05)",
+                                boxShadow: isMpHost ? "0 0 14px rgba(120, 255, 160, 0.45)" : "none",
+                            }}
+                        >
+                            {isMpHost ? "▶ Start" : "⏳ Waiting for host"}
+                        </button>
+                    );
+                })()}
                 {gameState.isMultiplayer && gameState.gameId && (
                     <button
                         onClick={this.copyGameCode}

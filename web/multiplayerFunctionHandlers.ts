@@ -220,6 +220,7 @@ const serverHandlers = {
 
         const safeClientId = sanitizeClientId(clientId);
         let game = GameManager.getGame(sanitized);
+        const wasMiss = !game;
         if (!game) {
             const dbg = GameManager.getGameDebug();
             console.log(`[srv] joinGame ${sanitized}: MISS — server has ${dbg.count} games in memory (ids=${JSON.stringify(dbg.ids)}). Auto-creating fresh game with this id. clientId=${safeClientId.slice(0, 8)} w=${gridWidth} h=${gridHeight} dur=${gameDuration}`);
@@ -239,15 +240,26 @@ const serverHandlers = {
         // did connect.
         maintainHost(sanitized);
 
+        // Cooperative games have no time limit, so an existing coop game sitting in "waiting" has no purpose — auto-start as soon as someone joins. Restricted to HIT so the lobby Create flow (always MISS, sends updateGameSettings + startGame from the client right after) doesn't race with this — the client's mode choice would arrive too late if we auto-started a freshly-created game in the default coop mode.
+        let autoStartedCoop = false;
+        const beforeAutoStart = GameManager.getGame(sanitized);
+        if (!wasMiss && beforeAutoStart && beforeAutoStart.gameMode === "cooperative" && beforeAutoStart.status === "waiting" && beforeAutoStart.players.length > 0) {
+            console.log(`[srv] joinGame ${sanitized}: auto-starting cooperative game (was waiting, now ${beforeAutoStart.players.length} player(s))`);
+            await GameManager.startGamePlaying(sanitized);
+            autoStartedCoop = true;
+            // No scheduleGameEnd — coop has no end timer.
+        }
+
         if (game) {
             let gameT = game;
             // Wait, so the client can know the game ID before we tell them about the update. Otherwise, they will just ignore the update.
             setImmediate(() => {
                 void (async () => {
                     // Restore the rejoining player FIRST and DIRECTLY (everything is already in memory). onGameStart flips them to the board, then their own snapshot restores grid + scores + word lists in one message. This must not sit behind broadcasts to other players — a dead/slow connection elsewhere would otherwise delay the rejoiner's words by the broadcast timeout.
-                    if (gameT.status === "playing" && gameT.startTime) {
+                    const gameNow = GameManager.getGame(sanitized);
+                    if (gameNow && gameNow.status === "playing" && gameNow.startTime) {
                         try {
-                            await player.onGameStart(sanitized, gameT.grid, gameT.startTime, gameT.gameDuration, gameT.totalPossibleWords, gameT.totalPossibleScore);
+                            await player.onGameStart(sanitized, gameNow.grid, gameNow.startTime, gameNow.gameDuration, gameNow.totalPossibleWords, gameNow.totalPossibleScore);
                         } catch (err) {
                             console.error(`onGameStart to rejoining player failed:`, (err as Error).stack ?? err);
                         }
@@ -259,6 +271,13 @@ const serverHandlers = {
                         } catch (err) {
                             console.error(`onGameState to rejoining player failed:`, (err as Error).stack ?? err);
                         }
+                    }
+                    // If we just auto-started a coop game, broadcast onGameStart to everyone else too — the snapshot covers them but the play UI needs onGameStart to flip out of the "waiting" view. Skip the rejoining player who already got it above.
+                    if (autoStartedCoop && gameNow && gameNow.startTime) {
+                        void GameManager.broadcastToGame(sanitized, async (otherClient) => {
+                            if (otherClient === player) return;
+                            await otherClient.onGameStart(sanitized, gameNow.grid, gameNow.startTime!, gameNow.gameDuration, gameNow.totalPossibleWords, gameNow.totalPossibleScore);
+                        });
                     }
                     // Then notify everyone else, fire-and-forget — never blocks the rejoiner.
                     const players = GameManager.getPlayerScores(sanitized);
