@@ -1,4 +1,4 @@
-import { startServer, restorePersistedGames } from "./multiplayerFunctionHandlers";
+import { startServer, restorePersistedGames, setFlushHook } from "./multiplayerFunctionHandlers";
 import { serializeAllGames } from "./GameManager";
 import { openGameDb, loadAllGames, flushGames } from "./gamePersistence";
 import { loadOrGenerateCert, startCertMaintenance, ensureARecord } from "./certManager";
@@ -221,6 +221,11 @@ function setupGamePersistence(): void {
     openGameDb(GAMES_DB_PATH);
     restorePersistedGames(loadAllGames());
     setInterval(() => flushGamesNow("interval"), GAME_FLUSH_INTERVAL);
+    // Lets the join/create path persist a brand-new game immediately. The throttle is only meaningful during steady play; a freshly created room needs to survive a crash even in the first 10 seconds.
+    setFlushHook((context) => {
+        console.log(`[srv] immediate flush triggered by ${context}`);
+        flushGamesNow(context);
+    });
     // systemd sends SIGTERM on restart/stop — flush synchronously so an in-flight deploy can't lose games. SIGINT covers Ctrl+C in dev.
     for (const signal of ["SIGTERM", "SIGINT"] as const) {
         process.on(signal, () => {

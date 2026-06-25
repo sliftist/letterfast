@@ -221,11 +221,14 @@ const serverHandlers = {
         const safeClientId = sanitizeClientId(clientId);
         let game = GameManager.getGame(sanitized);
         if (!game) {
-            console.log(`[srv] joinGame ${sanitized}: server does not know this game — AUTO-CREATING fresh game (clientId=${safeClientId.slice(0, 8)}, w=${gridWidth} h=${gridHeight} dur=${gameDuration})`);
+            const dbg = GameManager.getGameDebug();
+            console.log(`[srv] joinGame ${sanitized}: MISS — server has ${dbg.count} games in memory (ids=${JSON.stringify(dbg.ids)}). Auto-creating fresh game with this id. clientId=${safeClientId.slice(0, 8)} w=${gridWidth} h=${gridHeight} dur=${gameDuration}`);
             await GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration, false, false, safeClientId);
             game = GameManager.getGame(sanitized);
+            // Persist immediately so a crash within the 10s flush interval can't lose this brand-new game.
+            flushHook?.("createGameWithId");
         } else {
-            console.log(`[srv] joinGame ${sanitized}: existing game found (status=${game.status} players=${game.players.length} clientId=${safeClientId.slice(0, 8)})`);
+            console.log(`[srv] joinGame ${sanitized}: HIT — existing game (status=${game.status} players=${game.players.length} createdAt=${new Date(game.createdTime).toISOString()} lastActivity=${new Date(game.lastActivityTime).toISOString()} emptiedAt=${game.emptiedAt ? new Date(game.emptiedAt).toISOString() : "none"} clientId=${safeClientId.slice(0, 8)})`);
             GameManager.joinGame(sanitized, player, safeClientId);
         }
 
@@ -477,6 +480,14 @@ export const clientHandlers = {
     async onGameState(snapshot: GameManager.GameSnapshot): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== snapshot.gameId) return;
+        const fp = (g: GridCell[][] | undefined) => g ? g.map(r => r.map(c => c.letter).join("")).join("/") : "(none)";
+        const oldFp = fp(gameState.grid);
+        const newFp = fp(snapshot.grid);
+        const gridChanged = oldFp !== newFp;
+        console.log(`[mp] onGameState ${snapshot.gameId}: status=${snapshot.status} yourIdx=${snapshot.yourPlayerIndex} hostIdx=${snapshot.hostPlayerIndex} players=${snapshot.players.length} totalScore=${snapshot.totalPossibleScore} coopWords=${snapshot.coopMatchedWords?.length ?? 0} yourWords=${snapshot.yourWords?.length ?? 0}`);
+        if (gridChanged) {
+            console.warn(`[mp] onGameState ${snapshot.gameId}: GRID CHANGED. old=${oldFp.slice(0, 80)} new=${newFp.slice(0, 80)} (status was=${gameState.status} now=${snapshot.status})`);
+        }
         if (snapshot.status === "playing" && gameState.status !== "playing") {
             // Resync (e.g. after a reconnect) into a running game — a stale game-over modal would otherwise sit on top of a playing board with nothing left to close it.
             closeGameOverModal();
@@ -540,6 +551,12 @@ export const clientHandlers = {
     async onGameStart(gameId: string, grid: GridCell[][], startTime: number, duration: number, totalPossibleWords: number, totalPossibleScore: number): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
+        const oldFp = gameState.grid.map(r => r.map(c => c.letter).join("")).join("/");
+        const newFp = grid.map(r => r.map(c => c.letter).join("")).join("/");
+        console.log(`[mp] onGameStart ${gameId}: startTime=${new Date(startTime).toISOString()} duration=${duration} totalScore=${totalPossibleScore} prevMatched=${gameState.matchedWords.length} prevScore=${gameState.score} prevStatus=${gameState.status}`);
+        if (oldFp !== newFp && oldFp.length > 0) {
+            console.warn(`[mp] onGameStart ${gameId}: GRID CHANGED on game-start. old=${oldFp.slice(0, 80)} new=${newFp.slice(0, 80)}`);
+        }
         gameState.grid = grid;
         void ensureCellToWordsForGrid(grid);
         gameState.gameDuration = duration;
@@ -626,6 +643,7 @@ export const clientHandlers = {
     async onSettingsUpdate(gameId: string, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell?: boolean, showTotalPossibleScore?: boolean, gameMode?: "competitive" | "cooperative" | "competitive-shared", coopGoalFraction?: number, wordLengthMode?: WordLengthMode, targetScore?: number, vowelCenter4?: boolean): Promise<void> {
         if (!gameState.isMultiplayer) return;
         if (gameState.gameId !== gameId) return;
+        console.log(`[mp] onSettingsUpdate ${gameId}: ${gridWidth}x${gridHeight} dur=${gameDuration} mode=${gameMode} status=${gameState.status}`);
         const generationParamsChanged =
             gameState.gridWidth !== gridWidth
             || gameState.gridHeight !== gridHeight
@@ -728,9 +746,14 @@ export function restorePersistedGames(rows: { id: string; data: string }[]): voi
     for (const t of timers) {
         scheduleGameEnd(t.gameId, t.remainingMs, t.timerSeqNum);
     }
-    if (rows.length > 0) {
-        console.log(`Restored ${rows.length} persisted games (${timers.length} with active end timers)`);
-    }
+    const dbg = GameManager.getGameDebug();
+    console.log(`[srv] Restored ${rows.length} persisted games (${timers.length} with active end timers). In-memory ids: ${JSON.stringify(dbg.ids)}`);
+}
+
+// Lets server.ts wire up an immediate-flush callback (it owns the SQLite handle). Triggered by joinGame after a fresh createGameWithId so a sub-10s crash can't erase a newly-created game.
+let flushHook: ((context: string) => void) | undefined;
+export function setFlushHook(hook: (context: string) => void): void {
+    flushHook = hook;
 }
 
 GameManager.startCleanupInterval();

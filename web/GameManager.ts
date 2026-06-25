@@ -369,6 +369,25 @@ export function getGame(gameId: string): Game | undefined {
     return games.get(gameId);
 }
 
+// Diagnostic helper for the join-decision logger: tells us what the server knows about right now when a lookup misses.
+export function listGameIds(): string[] {
+    return [...games.keys()];
+}
+
+export function getGameDebug(): { count: number; ids: string[]; sample: { id: string; status: string; players: number; emptiedAt: number | undefined; lastActivityTime: number }[] } {
+    return {
+        count: games.size,
+        ids: [...games.keys()],
+        sample: [...games.values()].slice(0, 20).map(g => ({
+            id: g.id,
+            status: g.status,
+            players: g.players.length,
+            emptiedAt: g.emptiedAt,
+            lastActivityTime: g.lastActivityTime,
+        })),
+    };
+}
+
 // Resolves the designated host (by sticky clientId) to a slot index. While the
 // host is briefly disconnected they keep the role (a grace timer reassigns only
 // if they don't return — see reassignHostIfDisconnected). If the host is gone

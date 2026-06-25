@@ -541,7 +541,9 @@ export class LetterFastGame extends preact.Component {
             connect: async () => {
                 resetRPCClient();
                 const newRpc = getRPCClient();
+                console.log(`[mp] ws connect: sending joinGame(${code}, ${gameState.gridWidth}x${gameState.gridHeight}, ${gameState.gameDuration}ms, clientId=${getClientId().slice(0, 8)})`);
                 await newRpc.joinGame(code, gameState.gridWidth, gameState.gridHeight, gameState.gameDuration, getClientId());
+                console.log(`[mp] ws connect: joinGame returned (server processed; snapshot/onGameStart/onSettingsUpdate will follow)`);
             },
             disconnect: () => {
                 resetRPCClient();
