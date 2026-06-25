@@ -482,12 +482,14 @@ export class LetterFastGame extends preact.Component {
     };
 
     tryStartGameAsHost = async (options?: { autoStart?: boolean }) => {
-        if (!gameState.isMultiplayer) return;
-        if (!gameState.gameId) return;
-        if (gameState.myPlayerIndex !== gameState.hostPlayerIndex) return;
-        if (gameState.status === "playing") return;
+        const auto = !!options?.autoStart;
+        if (!gameState.isMultiplayer) { if (auto) console.log(`[mp] tryStartGameAsHost: skip auto (not multiplayer)`); return; }
+        if (!gameState.gameId) { if (auto) console.log(`[mp] tryStartGameAsHost: skip auto (no gameId)`); return; }
+        if (gameState.myPlayerIndex !== gameState.hostPlayerIndex) { if (auto) console.log(`[mp] tryStartGameAsHost: skip auto (not host: me=${gameState.myPlayerIndex} host=${gameState.hostPlayerIndex})`); return; }
+        if (gameState.status === "playing") { if (auto) console.log(`[mp] tryStartGameAsHost: skip auto (already playing)`); return; }
         // Auto-start (fired on connect) must only kick off a genuinely fresh game. Joining a game that already has results ("finished") must not silently regenerate the board — that looks like a reset. Manual starts (no autoStart flag) still restart a finished game on purpose.
-        if (options?.autoStart && gameState.status !== "waiting") return;
+        if (auto && gameState.status !== "waiting") { console.log(`[mp] tryStartGameAsHost: skip auto (status=${gameState.status} != waiting)`); return; }
+        console.log(`[mp] tryStartGameAsHost: proceeding (auto=${auto} status=${gameState.status} gameId=${gameState.gameId})`);
         try {
             const rpc = getRPCClient();
             await (rpc as any).updateGameSettings(
@@ -512,6 +514,9 @@ export class LetterFastGame extends preact.Component {
     connectToMultiplayer = async (code: string, options?: { autoStartAsHost?: boolean }) => {
         if (isNode()) return;
         const autoStartAsHost = options?.autoStartAsHost ?? false;
+        // ConnectionManager fires onConnect on every successful connect, including reconnects. autoStartAsHost is a fresh-room intent — once we've connected once we're an established member of the room and must not re-trigger startGame on a WS blip. Tracking this in a closure means a manual reconnect (a fresh connectToMultiplayer call) still gets the autostart while a transparent reconnect does not.
+        let autoStartConsumed = false;
+        console.log(`[mp] connectToMultiplayer code=${code} autoStartAsHost=${autoStartAsHost} clientId=${getClientId().slice(0, 8)}`);
 
         if (this.connectionManager) {
             this.connectionManager.cleanup();
@@ -551,7 +556,11 @@ export class LetterFastGame extends preact.Component {
                     }
                 },
                 onConnect: () => {
-                    if (!autoStartAsHost) return;
+                    if (!autoStartAsHost || autoStartConsumed) {
+                        console.log(`[mp] onConnect: skip autostart (autoStartAsHost=${autoStartAsHost} consumed=${autoStartConsumed})`);
+                        return;
+                    }
+                    autoStartConsumed = true;
                     setTimeout(() => { void this.tryStartGameAsHost({ autoStart: true }); }, 250);
                 },
             }
@@ -1718,7 +1727,9 @@ export class LetterFastGame extends preact.Component {
 
         const joinGameId = joinGameIdURL.value;
         if (joinGameId && !gameState.gameId) {
-            await this.connectToMultiplayer(joinGameId.toUpperCase(), { autoStartAsHost: true });
+            // A page refresh means rejoin the existing game, never start a new one. Auto-start is for the explicit "create a fresh room" flow (lobby Create/Join button), where the host intentionally wants the board generated and started as soon as the socket comes up. Passing autoStart here would cause a refresh-into-a-server-side-fresh-game (e.g., the room was evicted or never persisted) to silently regenerate the grid via startGame.
+            console.log(`[mp] componentDidMount: rejoining MP game ${joinGameId.toUpperCase()} from URL`);
+            await this.connectToMultiplayer(joinGameId.toUpperCase(), { autoStartAsHost: false });
         }
     }
 

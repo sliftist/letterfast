@@ -261,6 +261,7 @@ export async function createGame(playerCount: number, player: PlayerIdentifier, 
 }
 
 export async function createGameWithId(gameId: string, playerCount: number, player: PlayerIdentifier, gridWidth: number, gridHeight: number, gameDuration: number, showRemainingWordsPerCell = false, showTotalPossibleScore = false, clientId = ""): Promise<void> {
+    console.log(`[srv] createGameWithId ${gameId}: fresh game (w=${gridWidth} h=${gridHeight} dur=${gameDuration} clientId=${clientId.slice(0, 8)})`);
     const now = Date.now();
     const gridMetadata = await generateGameGrid(now, gridWidth, gridHeight);
 
@@ -323,6 +324,7 @@ export function joinGame(gameId: string, player: PlayerIdentifier, clientId = ""
             game.disconnectedPlayers.delete(player);
             game.emptiedAt = undefined;
             game.lastActivityTime = Date.now();
+            console.log(`[srv] joinGame ${gameId}: clientId-rejoin into slot ${existingIdx} (score=${game.scores.get(player) ?? 0}, words=${game.words.get(player)?.length ?? 0})`);
             return;
         }
     }
@@ -331,6 +333,7 @@ export function joinGame(gameId: string, player: PlayerIdentifier, clientId = ""
     if (game.players.includes(player)) {
         game.emptiedAt = undefined;
         game.lastActivityTime = Date.now();
+        console.log(`[srv] joinGame ${gameId}: same player handle already in game (no-op rejoin)`);
         return;
     }
     if (game.players.length >= game.playerCount) {
@@ -350,9 +353,11 @@ export function joinGame(gameId: string, player: PlayerIdentifier, clientId = ""
     if (allDisconnected) {
         game.players.unshift(player);
         game.clientIds.unshift(clientId);
+        console.log(`[srv] joinGame ${gameId}: NEW PLAYER unshifted into host slot 0 (all existing slots disconnected, clientId=${clientId.slice(0, 8)})`);
     } else {
         game.players.push(player);
         game.clientIds.push(clientId);
+        console.log(`[srv] joinGame ${gameId}: NEW PLAYER appended at slot ${game.players.length - 1} (clientId=${clientId.slice(0, 8)})`);
     }
     game.scores.set(player, 0);
     game.words.set(player, []);
@@ -440,6 +445,7 @@ export async function startGamePlaying(gameId: string): Promise<number> {
         throw new Error(`Game ${gameId} not found`);
     }
     const now = Date.now();
+    console.log(`[srv] startGamePlaying ${gameId}: regenerating grid (status was ${game.status}, players=${game.players.length}, dimensions=${game.gridWidth}x${game.gridHeight})`);
     const gridMetadata = await generateGameGrid(now, game.gridWidth, game.gridHeight, {
         wordLengthMode: game.wordLengthMode,
         targetScore: game.targetScore,
@@ -819,13 +825,16 @@ export function cleanupIdleGames(): void {
     for (const [gameId, game] of games.entries()) {
         if (game.emptiedAt !== undefined) {
             if (now - game.emptiedAt > EMPTY_GAME_GRACE_MS) {
+                console.log(`[srv] cleanupIdleGames: evicting ${gameId} (empty for ${Math.round((now - game.emptiedAt) / 3600000)}h, beyond ${Math.round(EMPTY_GAME_GRACE_MS / 3600000)}h grace)`);
                 games.delete(gameId);
             }
         } else if (game.players.length === 0) {
             // Defensive: shouldn't normally hit this since emptiedAt is set
             // alongside the last disconnect, but evict immediately if we do.
+            console.log(`[srv] cleanupIdleGames: evicting ${gameId} (zero players, no emptiedAt — defensive path)`);
             games.delete(gameId);
         } else if (now - game.lastActivityTime > oneWeek) {
+            console.log(`[srv] cleanupIdleGames: evicting ${gameId} (no activity for ${Math.round((now - game.lastActivityTime) / 3600000)}h, beyond 7d)`);
             games.delete(gameId);
         }
     }

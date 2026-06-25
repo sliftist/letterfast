@@ -221,9 +221,11 @@ const serverHandlers = {
         const safeClientId = sanitizeClientId(clientId);
         let game = GameManager.getGame(sanitized);
         if (!game) {
+            console.log(`[srv] joinGame ${sanitized}: server does not know this game — AUTO-CREATING fresh game (clientId=${safeClientId.slice(0, 8)}, w=${gridWidth} h=${gridHeight} dur=${gameDuration})`);
             await GameManager.createGameWithId(sanitized, 16, player, gridWidth, gridHeight, gameDuration, false, false, safeClientId);
             game = GameManager.getGame(sanitized);
         } else {
+            console.log(`[srv] joinGame ${sanitized}: existing game found (status=${game.status} players=${game.players.length} clientId=${safeClientId.slice(0, 8)})`);
             GameManager.joinGame(sanitized, player, safeClientId);
         }
 
