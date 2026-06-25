@@ -5,6 +5,7 @@ import { pageURL, joinGameIdURL } from "./Page";
 import { changeGridSize, getCurrentGridSize, gameState, applySettings, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION, WordLengthMode, DEFAULT_WORD_LENGTH_MODE } from "./GameState";
 import { observable } from "mobx";
 import { getRPCClient } from "./rpcClient";
+import { clearMultiplayerStateForSinglePlayer } from "./singlePlayerGames";
 
 export const STORAGE_KEY = "letterfast_game_config";
 
@@ -158,6 +159,7 @@ export class GameConfig extends preact.Component {
     }
 
     startSinglePlayerGame = async (config: { width: number; height: number }) => {
+        clearMultiplayerStateForSinglePlayer("lobby quick-SP");
         this.synced.customWidth = config.width;
         this.synced.customHeight = config.height;
         await changeGridSize(config);
@@ -167,6 +169,7 @@ export class GameConfig extends preact.Component {
     };
 
     onStartSinglePlayer = async () => {
+        clearMultiplayerStateForSinglePlayer("lobby custom-SP");
         await changeGridSize({
             width: this.synced.customWidth,
             height: this.synced.customHeight,

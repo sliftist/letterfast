@@ -2,6 +2,21 @@ import { URLParam } from "sliftutils/render-utils/URLParam";
 import { isNode } from "typesafecss";
 import { gameState, GridCell, LETTER_POINTS, GameMode, ensureCellToWordsForGrid, GAME_DURATION, DEFAULT_GAME_MODE, DEFAULT_COOP_GOAL_FRACTION, WordLengthMode, DEFAULT_WORD_LENGTH_MODE, applySettings } from "./GameState";
 import { findAllWordsInGrid, getWordTrie, calculateTotalScoreForWords } from "./GridGenerator";
+import { joinGameIdURL } from "./Page";
+
+// Invariant: having `joinGameIdURL` / `gameState.gameId` set means the user IS in a multiplayer game. Entering any single-player context (URL apply, lobby SP, in-game New SP, challenge) must clear MP state — otherwise a stale `?join=X` left from a prior MP session will hijack the next refresh (componentDidMount prefers `?join=` and asks the server to rejoin X; the server doesn't know X so it auto-creates a fresh game with that id and the user sees a "different board").
+export function clearMultiplayerStateForSinglePlayer(reason: string): void {
+    if (gameState.isMultiplayer || gameState.gameId || joinGameIdURL.value) {
+        console.log(`[sp] clearing leftover MP state (${reason}): isMultiplayer=${gameState.isMultiplayer} gameId=${gameState.gameId} joinUrl=${joinGameIdURL.value}`);
+    }
+    gameState.isMultiplayer = false;
+    gameState.gameId = undefined;
+    gameState.myPlayerIndex = undefined;
+    gameState.players = [];
+    gameState.hostPlayerIndex = 0;
+    gameState.connectionStatus = "disconnected";
+    if (joinGameIdURL.value) joinGameIdURL.value = "";
+}
 
 // Single-player games are identified by a compact URL param that custom-encodes the game config. The id alone recreates the board, so sharing the URL shares the game. Per-id progress (words, score, elapsed time, status) lives in the origin-private file system, one file per game keyed by a hash of the id — reloading resumes your game, while someone else opening your link gets the same board fresh.
 //
@@ -176,6 +191,8 @@ export async function applySingleGameFromURL(): Promise<boolean> {
         return false;
     }
 
+    // The URL says "this is a single-player game" — any MP state still around must be a leftover; clear it before we start populating SP state so a later refresh can't fall back to MP rejoin behavior.
+    clearMultiplayerStateForSinglePlayer("applySingleGameFromURL");
     const trie = await getWordTrie();
     const result = findAllWordsInGrid(config.grid, trie, config.wordLengthMode);
     gameState.gridWidth = config.grid[0].length;

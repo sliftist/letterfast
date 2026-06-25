@@ -1415,6 +1415,11 @@ export class LetterFastGame extends preact.Component {
     // (which the menu keeps == the last configured state). Applies grid size,
     // duration, mode, and goal, then regenerates the board.
     startConfiguredSinglePlayerGame = async () => {
+        // Coming from the in-game menu — if we're currently in a MP room, leave it cleanly (drops the WS, clears the join URL) so the fresh SP board doesn't co-exist with a stale `?join=` that a refresh would otherwise resurrect.
+        if (gameState.isMultiplayer || gameState.gameId || joinGameIdURL.value) {
+            console.log(`[sp] startConfiguredSinglePlayerGame: leaving MP first`);
+            this.leaveMultiplayer();
+        }
         const w = Math.max(2, Math.min(10, this.synced.cfgWidth));
         const h = Math.max(2, Math.min(10, this.synced.cfgHeight));
         gameState.gridWidth = w;
@@ -1695,6 +1700,11 @@ export class LetterFastGame extends preact.Component {
                 return;
             }
 
+            // Challenge mode is a single-player flow; clear any lingering MP id so a refresh from challenge mode can't fall back to MP rejoin.
+            if (gameState.gameId || joinGameIdURL.value) {
+                console.log(`[sp] challenge entry: leaving MP first`);
+                this.leaveMultiplayer();
+            }
             gameState.isMultiplayer = false;
             gameState.isChallengeMode = true;
             gameState.grid = challengeData.grid;
