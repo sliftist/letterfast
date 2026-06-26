@@ -2122,16 +2122,33 @@ export class LetterFastGame extends preact.Component {
         this.handleSelectionMove(pos);
     };
 
-    showWordAcceptedFeedback = (points: number, word?: string) => {
+    // Bumped every time the grid is optimistically flashed, so the MP submit's catch handler can cancel only its own flash and never clobber a newer one.
+    optimisticAcceptToken = 0;
+
+    // Grid-side feedback only (pulse + accepted flash). Split out from showWordAcceptedFeedback so the MP submit can fire this BEFORE awaiting the WS round-trip — the client already knows whether the word is in the dictionary and on the grid, so the visual confirmation doesn't need to wait. Score, +N floater, and recent-word reveal still wait for server confirmation (in showWordCreditFeedback) so they don't appear for a word the server rejects.
+    showOptimisticAcceptedGridFlash = (cells: { row: number; col: number }[]): number => {
         gameState.consecutiveWrongWords = 0;
-        this.synced.pulseCells = this.synced.selectedCells.slice();
-        this.synced.acceptedCells = this.synced.selectedCells.slice();
+        const token = ++this.optimisticAcceptToken;
+        this.synced.pulseCells = cells.slice();
+        this.synced.acceptedCells = cells.slice();
         setTimeout(() => {
             this.synced.pulseCells = [];
         }, 600);
         setTimeout(() => {
             this.synced.acceptedCells = [];
         }, ACCEPTED_CELL_FLASH_MS);
+        return token;
+    };
+
+    // Cut a still-running optimistic flash short — used when the server rejects (BLOCKED or coop dup) so the green flash doesn't keep playing under the red/amber overlay. Token guard prevents a slow rejection of an earlier submission from cancelling a fresh flash for a newer one.
+    cancelOptimisticAcceptedGridFlash = (token: number) => {
+        if (this.optimisticAcceptToken !== token) return;
+        this.synced.pulseCells = [];
+        this.synced.acceptedCells = [];
+    };
+
+    // Score/word-list-credit feedback only (score pulse, +N floater, recent-word highlight). No grid touching — the grid was already flashed (optimistically in MP, or as part of showWordAcceptedFeedback in SP).
+    showWordCreditFeedback = (points: number, word?: string) => {
         if (word) {
             const upper = word.toUpperCase();
             const token = ++this.synced.recentAcceptedToken;
@@ -2148,6 +2165,11 @@ export class LetterFastGame extends preact.Component {
         setTimeout(() => {
             this.synced.floatingScores = this.synced.floatingScores.filter(s => s.id !== scoreId);
         }, 1000);
+    };
+
+    showWordAcceptedFeedback = (points: number, word?: string) => {
+        this.showOptimisticAcceptedGridFlash(this.synced.selectedCells.slice());
+        this.showWordCreditFeedback(points, word);
     };
 
     showWrongWordFeedback = (word?: string) => {
@@ -2236,6 +2258,8 @@ export class LetterFastGame extends preact.Component {
             if (!isNode() && gameState.gameId) {
                 const rpc = getRPCClient();
                 const cells = this.synced.selectedCells.slice();
+                // Fire the grid animation right now — the client already verified the word is in the dictionary, on the grid, and not in our own matched-words set above, so the only ways the server can still reject are coop dup-by-other-player or competitive-shared BLOCKED. Both are quick rejections that we cancel below; everything else is a 99.9% sure accept and feels instant this way. Score/word-list updates still wait for server confirmation.
+                const optimisticToken = this.showOptimisticAcceptedGridFlash(cells);
                 try {
                     const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), cells);
                     if (result.points > 0) {
@@ -2250,9 +2274,12 @@ export class LetterFastGame extends preact.Component {
                             gameState.matchedWords.push({ word: upperWord, points: result.points });
                             gameState.matchedWordsSet.add(upperWord);
                         }
-                        this.showWordAcceptedFeedback(result.points, upperWord);
+                        // Grid flash already started; show the score-credit half (score pulse, +N floater, recent-word highlight).
+                        this.showWordCreditFeedback(result.points, upperWord);
                     }
                 } catch (err) {
+                    // Cancel the optimistic flash so the blocked/already overlay doesn't fight it.
+                    this.cancelOptimisticAcceptedGridFlash(optimisticToken);
                     const msg = err instanceof Error ? err.message : String(err);
                     if (gameState.gameMode === "competitive-shared" && msg.startsWith("BLOCKED:")) {
                         // Another player already picked this word — show
