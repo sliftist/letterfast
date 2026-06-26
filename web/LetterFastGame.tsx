@@ -2202,6 +2202,9 @@ export class LetterFastGame extends preact.Component {
             .join("")
             .toLowerCase();
 
+        // Anything shorter than the global 3-letter floor is almost certainly not an attempted word — a stray tap, an accidental two-cell swipe — so silently swallow it. The "Not a word!" timeout would be punitive for something the user didn't even mean to submit.
+        if (word.length < 3) return;
+        // A long-enough trace that fails the mode filter (e.g. 3 letters in min4 mode) IS an attempted word and gets the regular wrong-word feedback so the rule is visible.
         if (!isWordLengthAllowed(word.length, gameState.wordLengthMode)) {
             this.showWrongWordFeedback(word);
             return;
