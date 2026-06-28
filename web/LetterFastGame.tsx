@@ -2261,14 +2261,16 @@ export class LetterFastGame extends preact.Component {
             if (!isNode() && gameState.gameId) {
                 const rpc = getRPCClient();
                 const cells = this.synced.selectedCells.slice();
-                // Fire the grid animation right now — the client already verified the word is in the dictionary, on the grid, and not in our own matched-words set above, so the only ways the server can still reject are coop dup-by-other-player or competitive-shared BLOCKED. Both are quick rejections that we cancel below; everything else is a 99.9% sure accept and feels instant this way. Score/word-list updates still wait for server confirmation.
+                const upperWord = word.toUpperCase();
+                // Fire the ENTIRE acceptance animation right now — grid flash, score pulse, +N floater, recent-word reveal — without waiting for the server. The client already verified the word is in the dictionary, on the grid, and not in our own matched-words set above, so the only ways the server can still reject are coop dup-by-another-player or competitive-shared BLOCKED. Both are rare quick rejections that we cancel below; everything else is a sure accept, and driving the full animation client-side is what makes it feel instant. Points are computed locally with the same scoring the server uses; the authoritative matchedWords/score still get reconciled by the server reply and broadcasts.
+                const optimisticPoints = calculateWordScoreForGrid(gameState.grid, cells);
                 const optimisticToken = this.showOptimisticAcceptedGridFlash(cells);
+                this.showWordCreditFeedback(optimisticPoints, upperWord);
                 try {
-                    const result = await rpc.submitWord(gameState.gameId, word.toUpperCase(), cells);
+                    const result = await rpc.submitWord(gameState.gameId, upperWord, cells);
                     if (result.points > 0) {
-                        const upperWord = word.toUpperCase();
                         if (gameState.gameMode === "cooperative") {
-                            // server's onCoopWord broadcast attributes & adds globally; just feedback here
+                            // server's onCoopWord broadcast attributes & adds globally; just record locally here
                             if (!gameState.matchedWordsSet.has(upperWord)) {
                                 gameState.matchedWords.push({ word: upperWord, points: result.points, playerIndex: gameState.myPlayerIndex });
                                 gameState.matchedWordsSet.add(upperWord);
@@ -2277,8 +2279,6 @@ export class LetterFastGame extends preact.Component {
                             gameState.matchedWords.push({ word: upperWord, points: result.points });
                             gameState.matchedWordsSet.add(upperWord);
                         }
-                        // Grid flash already started; show the score-credit half (score pulse, +N floater, recent-word highlight).
-                        this.showWordCreditFeedback(result.points, upperWord);
                     }
                 } catch (err) {
                     // Cancel the optimistic flash so the blocked/already overlay doesn't fight it.
@@ -2288,7 +2288,6 @@ export class LetterFastGame extends preact.Component {
                         // Another player already picked this word — show
                         // it in our list with strikethrough and flash the
                         // cells red so it's obvious what happened.
-                        const upperWord = word.toUpperCase();
                         if (!gameState.matchedWordsSet.has(upperWord)) {
                             gameState.matchedWords.push({ word: upperWord, points: 0, blocked: true });
                             gameState.matchedWordsSet.add(upperWord);
