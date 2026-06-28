@@ -2264,11 +2264,12 @@ export class LetterFastGame extends preact.Component {
                 const cells = this.synced.selectedCells.slice();
                 const upperWord = word.toUpperCase();
                 // Fire the ENTIRE acceptance animation right now — grid flash, score pulse, +N floater, recent-word reveal — without waiting for the server. The client already verified the word is in the dictionary, on the grid, and not in our own matched-words set above, so the only ways the server can still reject are coop dup-by-another-player or competitive-shared BLOCKED. Both are rare quick rejections that we cancel below; everything else is a sure accept, and driving the full animation client-side is what makes it feel instant. Points are computed locally with the same scoring the server uses; the authoritative matchedWords/score still get reconciled by the server reply and broadcasts.
+                const gameId = gameState.gameId;
                 const optimisticPoints = calculateWordScoreForGrid(gameState.grid, cells);
                 const optimisticToken = this.showOptimisticAcceptedGridFlash(cells);
                 this.showWordCreditFeedback(optimisticPoints, upperWord);
-                try {
-                    const result = await rpc.submitWord(gameState.gameId, upperWord, cells);
+                // Fire-and-forget the server round-trip: NOT awaited, so processSelectedWord (and its caller's selectedCells = [] cleanup in handleSelectionEnd's finally) returns immediately. Awaiting here kept the cells in the lingering "selected" highlight until the reply landed, which is the ~half-second delay that made MP feel laggy vs single player. The animation above is already fully client-side; the server call only reconciles the authoritative matchedWords/score and handles the rare rejection.
+                void rpc.submitWord(gameId, upperWord, cells).then(result => {
                     if (result.points > 0) {
                         if (gameState.gameMode === "cooperative") {
                             // server's onCoopWord broadcast attributes & adds globally; just record locally here
@@ -2281,7 +2282,7 @@ export class LetterFastGame extends preact.Component {
                             gameState.matchedWordsSet.add(upperWord);
                         }
                     }
-                } catch (err) {
+                }).catch(err => {
                     // Cancel the optimistic flash so the blocked/already overlay doesn't fight it.
                     this.cancelOptimisticAcceptedGridFlash(optimisticToken);
                     const msg = err instanceof Error ? err.message : String(err);
@@ -2298,7 +2299,7 @@ export class LetterFastGame extends preact.Component {
                     } else {
                         console.warn("submitWord failed:", err);
                     }
-                }
+                });
             }
             return;
         }
