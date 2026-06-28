@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Letter Quick</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Atkinson Hyperlegible subset to ONLY the capital I (text=I): its I has
+         clean sans-serif bars top and bottom, unlike Inter's bare stem which is
+         indistinguishable from L on the grid. Because the served font contains
+         just that one glyph, per-glyph fallback sends every other character to
+         Inter automatically. -->
+    <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&text=I&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            word-break: break-word;
+        }
+        body, button, textarea, .FullscreenModal {
+            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif;
+            font-size: 12px;
+        }
+        /* Board tiles only: Atkinson's barred capital I disambiguates I vs L
+         * on the grid. The font is subset to just "I", so all other glyphs in
+         * the tile (and regular text everywhere else) stay Inter. */
+        .board-letter {
+            font-family: 'Atkinson Hyperlegible', 'Inter', system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+        body, .FullscreenModal {
+            background: transparent!important;
+            color: hsl(0, 0%, 100%)!important;
+        }
+        html, body {
+            overscroll-behavior: none;
+        }
+        body {
+            margin: 0px;
+            padding: 0px;
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
+        }
+        a:not(.Anchor), a:visited:not(.Anchor) {
+            color: hsl(210, 75%, 65%);
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script src="./browser.js" crossorigin="anonymous"></script>
+</body>
+</html>
+
