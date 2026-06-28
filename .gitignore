@@ -42,3 +42,4 @@ data
 words.txt
 cache
 games.db*
+web/generated

@@ -39,6 +39,7 @@ import { getRPCClient, resetRPCClient, setRPCDisconnectHandler } from "./rpcClie
 import { loadSavedConfig, saveConfig } from "./GameConfig";
 import { ConnectionManager } from "./ConnectionManager";
 import { showGameOver } from "./GameOver";
+import { BUILD_VERSION } from "./generated/buildVersion";
 
 const DEBUG_MODE = false;
 const ENABLE_VIBRATION = true;
@@ -3592,6 +3593,13 @@ export class LetterFastGame extends preact.Component {
                                 {COMMON_CONSONANT_PAIRS}
                             </div>
                         )}
+                    </div>
+
+                    <div
+                        className={css.fontSize(11).colorhsl(0, 0, 55).textAlign("center").marginTop(8) + ""}
+                        title="The build this client was served from"
+                    >
+                        Version {BUILD_VERSION}
                     </div>
                 </div>
             </div>

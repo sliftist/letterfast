@@ -12,7 +12,7 @@
         "type": "yarn tsc --noEmit",
         "test": "yarn typenode ./scripts/test.ts",
         "build-words": "node scripts/buildWordsJS.js",
-        "build-web": "yarn build-words && build-web --indexHtml ./index.html",
+        "build-web": "node scripts/writeBuildVersion.js && yarn build-words && build-web --indexHtml ./index.html",
         "watch-web": "slift-watch --port 9887 \"web/*.ts\" \"web/*.tsx\" \"yarn build-web\"",
         "watch": "yarn watch-web",
         "build": "yarn build-web",
